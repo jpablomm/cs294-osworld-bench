@@ -165,9 +165,27 @@ class OSWorldClient:
             command.append(url)
         return self.execute(command)
 
+    def run_python(self, code: str) -> Dict[str, Any]:
+        """
+        Execute Python code on the OSWorld VM.
+
+        Args:
+            code: Python code to execute
+
+        Returns:
+            Execution result
+        """
+        response = self._session.post(
+            f"{self.base_url}/run_python",
+            json={"code": code},
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+
     def type_text(self, text: str) -> Dict[str, Any]:
         """
-        Type text using pyautogui (simulated keyboard).
+        Type text using pyautogui.
 
         Args:
             text: Text to type
@@ -175,12 +193,14 @@ class OSWorldClient:
         Returns:
             Execution result
         """
-        # This requires a custom endpoint or we use execute with xdotool
-        return self.execute(["xdotool", "type", "--", text])
+        # Escape single quotes in text
+        escaped_text = text.replace("'", "\\'")
+        code = f"import pyautogui\npyautogui.write('{escaped_text}')"
+        return self.run_python(code)
 
-    def click_at(self, x: int, y: int) -> Dict[str, Any]:
+    def mouse_move(self, x: int, y: int) -> Dict[str, Any]:
         """
-        Click at specific coordinates.
+        Move mouse to specific coordinates.
 
         Args:
             x: X coordinate
@@ -189,7 +209,80 @@ class OSWorldClient:
         Returns:
             Execution result
         """
-        return self.execute(["xdotool", "mousemove", str(x), str(y), "click", "1"])
+        code = f"import pyautogui\npyautogui.moveTo({x}, {y})"
+        return self.run_python(code)
+
+    def click_at(self, x: int, y: int) -> Dict[str, Any]:
+        """
+        Click at specific coordinates.
+
+        Args:
+            x: X coordinate (None to click at current position)
+            y: Y coordinate (None to click at current position)
+
+        Returns:
+            Execution result
+        """
+        if x is None or y is None:
+            code = "import pyautogui\npyautogui.click()"
+        else:
+            code = f"import pyautogui\npyautogui.click({x}, {y})"
+        return self.run_python(code)
+
+    def double_click_at(self, x: int, y: int) -> Dict[str, Any]:
+        """
+        Double-click at specific coordinates.
+
+        Args:
+            x: X coordinate
+            y: Y coordinate
+
+        Returns:
+            Execution result
+        """
+        code = f"import pyautogui\npyautogui.doubleClick({x}, {y})"
+        return self.run_python(code)
+
+    def right_click_at(self, x: int, y: int) -> Dict[str, Any]:
+        """
+        Right-click at specific coordinates.
+
+        Args:
+            x: X coordinate
+            y: Y coordinate
+
+        Returns:
+            Execution result
+        """
+        code = f"import pyautogui\npyautogui.rightClick({x}, {y})"
+        return self.run_python(code)
+
+    def press_key(self, key: str) -> Dict[str, Any]:
+        """
+        Press a keyboard key.
+
+        Args:
+            key: Key name (e.g., "enter", "esc", "a")
+
+        Returns:
+            Execution result
+        """
+        code = f"import pyautogui\npyautogui.press('{key}')"
+        return self.run_python(code)
+
+    def hotkey(self, *keys: str) -> Dict[str, Any]:
+        """
+        Press a combination of keys simultaneously.
+
+        Args:
+            *keys: Key names to press together (e.g., "ctrl", "c")
+
+        Returns:
+            Execution result
+        """
+        keys_str = ", ".join([f"'{k}'" for k in keys])
+        code = f"import pyautogui\npyautogui.hotkey({keys_str})"
+        return self.run_python(code)
 
     def get_terminal_output(self) -> str:
         """
