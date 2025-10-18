@@ -188,15 +188,16 @@ def run_single_task(
         except:
             pass
 
-        # Launch Chrome with proper flags for this environment
-        chrome_cmd = f"google-chrome --no-sandbox --user-data-dir=/tmp/chrome-{task_id[:8]} https://www.google.com &"
+        # Launch Chrome with blank page to avoid Google CAPTCHA
+        # Using about:blank instead of google.com to prevent bot detection
+        chrome_cmd = f"google-chrome --no-sandbox --user-data-dir=/tmp/chrome-{task_id[:8]} about:blank &"
         logger.info(f"Executing: {chrome_cmd}")
         try:
             osworld_client.execute(chrome_cmd, shell=True, timeout=10)
         except Exception as e:
             # Chrome launch may timeout but that's OK - it runs in background
             logger.debug(f"Chrome launch timed out (expected): {e}")
-        time.sleep(5)  # Give Chrome time to fully start
+        time.sleep(3)  # Give Chrome time to fully start
     else:
         # Run standard task setup for non-Chrome tasks
         setup_config = task_config.get("config", [])
