@@ -50,71 +50,28 @@ def decide(obs: Observation) -> Dict[str, Any]:
     """
     Decide next action based on observation.
 
-    Returns action in native OSWorld format:
-    - action_type: "execute", "click", "type", "DONE"
-    - command: for execute actions
-    - x, y: for click actions
-    - text: for type actions
+    Returns action in OSWorld White Agent Bridge format:
+    - op: "click", "type", "hotkey", "wait", "done", etc.
+    - args: dict with operation-specific arguments
     """
     global task_state
 
     step = obs.frame_id
-    instruction = obs.instruction.lower()
+    instruction = obs.instruction if obs.instruction else ""
     task_state["step"] = step
 
-    logger.info(f"Step {step}: Deciding action for instruction: {instruction[:50]}")
+    logger.info(f"Step {step}: Deciding action for instruction: {instruction[:100] if instruction else '(no instruction)'}")
 
-    # Simple task-based logic
+    # For now, implement a simple strategy that just observes and finishes
+    # This will be expanded later with actual task logic
 
-    # 1. Screenshot-only tasks
-    if "screenshot" in instruction or "capture" in instruction:
-        logger.info(f"Step {step}: Screenshot task - finishing after observation")
-        if step >= 1:
-            return {"action_type": "DONE"}
-        return {"action_type": "execute", "command": "echo 'Screenshot captured'"}
-
-    # 2. Chrome tasks
-    if "chrome" in instruction or "google" in instruction:
-        if step == 1:
-            logger.info(f"Step {step}: Opening Chrome")
-            return {
-                "action_type": "execute",
-                "command": "google-chrome --no-sandbox --user-data-dir=/tmp/chrome-test --new-window https://google.com"
-            }
-        elif step == 2:
-            logger.info(f"Step {step}: Waiting for Chrome to load")
-            return {"action_type": "execute", "command": "sleep 2"}
-        elif step >= 3:
-            logger.info(f"Step {step}: Chrome task complete")
-            return {"action_type": "DONE"}
-
-    # 3. File/document tasks
-    if "file" in instruction or "document" in instruction:
-        if step == 1:
-            logger.info(f"Step {step}: Opening file manager")
-            return {"action_type": "execute", "command": "pcmanfm &"}
-        elif step >= 3:
-            return {"action_type": "DONE"}
-
-    # 4. Text editor tasks
-    if "text" in instruction or "edit" in instruction or "write" in instruction:
-        if step == 1:
-            logger.info(f"Step {step}: Opening text editor")
-            return {"action_type": "execute", "command": "gedit &"}
-        elif step == 2:
-            logger.info(f"Step {step}: Typing text")
-            return {"action_type": "type", "text": "Hello from White Agent"}
-        elif step >= 3:
-            return {"action_type": "DONE"}
-
-    # Default: observe for a few steps then finish
-    if step >= 5:
+    if step >= 10:
         logger.info(f"Step {step}: Max steps reached, finishing")
-        return {"action_type": "DONE"}
+        return {"op": "done", "args": {}}
 
     # Wait and observe
     logger.info(f"Step {step}: Observing...")
-    return {"action_type": "execute", "command": "sleep 1"}
+    return {"op": "wait", "args": {"duration": 1.0}}
 
 
 @app.get("/health")
