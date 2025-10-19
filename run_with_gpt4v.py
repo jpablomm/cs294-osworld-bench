@@ -50,16 +50,51 @@ def run_task_setup(osworld_client: OSWorldClient, config_list: list):
 
         try:
             if config_type == "download":
-                # Handle file downloads
+                # Handle file downloads - download locally then upload to VM
+                import requests
+                import tempfile
                 files = params.get("files", [])
                 for file_info in files:
                     url = file_info.get("url")
                     path = file_info.get("path")
                     logger.info(f"Downloading {url} to {path}")
-                    # Download file using curl
-                    download_cmd = f"curl -L -o {path} {url}"
-                    result = osworld_client.execute(download_cmd, shell=True, timeout=60)
-                    logger.debug(f"Result: {result}")
+
+                    # Download file locally
+                    try:
+                        response = requests.get(url, stream=True, timeout=300)
+                        response.raise_for_status()
+
+                        # Save to temp file
+                        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    tmp_file.write(chunk)
+                            temp_path = tmp_file.name
+
+                        logger.info(f"Downloaded to local temp file: {temp_path}")
+
+                        # Upload to VM using multipart form
+                        from requests_toolbelt.multipart.encoder import MultipartEncoder
+                        form = MultipartEncoder({
+                            "file_path": path,
+                            "file_data": (os.path.basename(path), open(temp_path, "rb"))
+                        })
+                        headers = {"Content-Type": form.content_type}
+
+                        upload_url = f"{osworld_client.base_url}/setup/upload"
+                        upload_response = requests.post(upload_url, headers=headers, data=form, timeout=600)
+
+                        if upload_response.status_code == 200:
+                            logger.info(f"File uploaded successfully: {path}")
+                            logger.debug(f"Upload response: {upload_response.text}")
+                        else:
+                            logger.error(f"Failed to upload file {path}. Status: {upload_response.status_code}, Response: {upload_response.text}")
+
+                        # Clean up temp file
+                        os.remove(temp_path)
+
+                    except Exception as e:
+                        logger.error(f"Download/upload failed: {e}")
             elif config_type == "launch":
                 command = params.get("command", [])
                 # Launch GUI apps in background using shell
