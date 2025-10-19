@@ -49,7 +49,18 @@ def run_task_setup(osworld_client: OSWorldClient, config_list: list):
         params = config.get("parameters", {})
 
         try:
-            if config_type == "launch":
+            if config_type == "download":
+                # Handle file downloads
+                files = params.get("files", [])
+                for file_info in files:
+                    url = file_info.get("url")
+                    path = file_info.get("path")
+                    logger.info(f"Downloading {url} to {path}")
+                    # Download file using curl
+                    download_cmd = f"curl -L -o {path} {url}"
+                    result = osworld_client.execute(download_cmd, shell=True, timeout=60)
+                    logger.debug(f"Result: {result}")
+            elif config_type == "launch":
                 command = params.get("command", [])
                 # Launch GUI apps in background using shell
                 command_str = ' '.join(command) + ' &'
@@ -58,9 +69,35 @@ def run_task_setup(osworld_client: OSWorldClient, config_list: list):
                 logger.debug(f"Result: {result}")
             elif config_type == "execute":
                 command = params.get("command", [])
-                # Execute commands normally
-                logger.info(f"Executing: {' '.join(command)}")
-                result = osworld_client.execute(command, shell=False, timeout=30)
+                shell = params.get("shell", False)
+
+                # Substitute template variables (e.g., {SCREEN_WIDTH_HALF}, {SCREEN_HEIGHT_HALF})
+                # Default screen size is 1920x1080
+                template_vars = {
+                    'SCREEN_WIDTH_HALF': '960',
+                    'SCREEN_HEIGHT_HALF': '540',
+                    'SCREEN_WIDTH': '1920',
+                    'SCREEN_HEIGHT': '1080'
+                }
+
+                # Handle both string and list commands
+                if isinstance(command, str):
+                    # Substitute template variables in string commands
+                    for var, value in template_vars.items():
+                        command = command.replace(f'{{{var}}}', value)
+                    logger.info(f"Executing: {command}")
+                    result = osworld_client.execute(command, shell=True, timeout=30)
+                else:
+                    # Substitute template variables in list commands
+                    substituted_command = []
+                    for part in command:
+                        for var, value in template_vars.items():
+                            part = part.replace(f'{{{var}}}', value)
+                        substituted_command.append(part)
+                    command = substituted_command
+
+                    logger.info(f"Executing: {' '.join(command)}")
+                    result = osworld_client.execute(command, shell=shell, timeout=30)
                 logger.debug(f"Result: {result}")
             elif config_type == "sleep":
                 seconds = params.get("seconds", 1)
