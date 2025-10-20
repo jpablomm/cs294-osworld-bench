@@ -629,6 +629,14 @@ async def _execute_with_white_agent(
                 response.raise_for_status()
 
                 message = response.json()
+
+                # Check for error responses
+                if "action" not in message.get("metadata", {}):
+                    error_msg = message.get("metadata", {}).get("error", "Unknown error")
+                    logger.error(f"White agent returned error: {error_msg}")
+                    logger.error(f"Full response: {message}")
+                    raise RuntimeError(f"White agent error: {error_msg}")
+
                 action = message["metadata"]["action"]
                 is_done = message["metadata"].get("done", False)
 
@@ -710,54 +718,69 @@ async def _execute_osworld_action(
     """
     Execute a single action on the OSWorld VM
 
-    Translates action dict to OSWorld REST API calls
+    Translates action dict to Python code and executes via /run_python endpoint
     """
     op = action.get("op")
     args = action.get("args", {})
 
+    # Generate Python code based on action type
+    python_code = None
+
     if op == "click":
         # Click action
-        await client.post(
-            f"{base_url}/action",
-            json={
-                "action": "click",
-                "x": args["x"],
-                "y": args["y"],
-                "button": args.get("button", "left")
-            }
-        )
+        x = args.get("x")
+        y = args.get("y")
+        button = args.get("button", "left")
+
+        if x is not None and y is not None:
+            if button == "left":
+                python_code = f"import pyautogui\npyautogui.click({x}, {y})"
+            elif button == "right":
+                python_code = f"import pyautogui\npyautogui.rightClick({x}, {y})"
+        else:
+            python_code = "import pyautogui\npyautogui.click()"
+
+    elif op == "double_click":
+        # Double click action
+        x = args.get("x")
+        y = args.get("y")
+        if x is not None and y is not None:
+            python_code = f"import pyautogui\npyautogui.doubleClick({x}, {y})"
+
+    elif op == "right_click":
+        # Right click action
+        x = args.get("x")
+        y = args.get("y")
+        if x is not None and y is not None:
+            python_code = f"import pyautogui\npyautogui.rightClick({x}, {y})"
 
     elif op == "type":
         # Type text action
-        await client.post(
-            f"{base_url}/action",
-            json={
-                "action": "type",
-                "text": args["text"]
-            }
-        )
+        text = args.get("text", "")
+        # Escape quotes in text
+        escaped_text = text.replace("\\", "\\\\").replace('"', '\\"')
+        python_code = f'import pyautogui\npyautogui.typewrite("{escaped_text}")'
 
     elif op == "hotkey":
         # Hotkey action
-        await client.post(
-            f"{base_url}/action",
-            json={
-                "action": "hotkey",
-                "keys": args["keys"]
-            }
-        )
+        keys = args.get("keys", [])
+        if len(keys) == 1:
+            python_code = f'import pyautogui\npyautogui.press("{keys[0]}")'
+        elif len(keys) > 1:
+            keys_str = ", ".join([f'"{k}"' for k in keys])
+            python_code = f'import pyautogui\npyautogui.hotkey({keys_str})'
+
+    elif op == "scroll":
+        # Scroll action
+        amount = args.get("amount", 0)
+        python_code = f"import pyautogui\npyautogui.scroll({amount})"
 
     elif op == "execute_python":
-        # Execute Python code
-        await client.post(
-            f"{base_url}/execute",
-            json={
-                "code": args["code"]
-            }
-        )
+        # Execute Python code directly
+        python_code = args.get("code")
 
     elif op == "execute_command":
-        # Execute shell command
+        # Execute shell command via /execute endpoint
         await client.post(
             f"{base_url}/execute",
             json={
@@ -765,17 +788,38 @@ async def _execute_osworld_action(
                 "shell": args.get("shell", True)
             }
         )
+        return
 
     elif op == "wait":
         # Local wait
         await asyncio.sleep(args.get("duration", 1.0))
+        return
 
     elif op == "done":
         # Task complete - no action needed
-        pass
+        return
 
     else:
         logger.warning(f"Unknown action op: {op}")
+        return
+
+    # Execute the Python code if we generated any
+    if python_code:
+        logger.info(f"Executing Python code: {python_code}")
+        response = await client.post(
+            f"{base_url}/run_python",
+            json={"code": python_code},
+            timeout=30.0
+        )
+
+        if response.status_code != 200:
+            logger.error(f"Failed to execute action: {response.status_code} {response.text}")
+            raise RuntimeError(f"Action execution failed: {response.text}")
+
+        result = response.json()
+        if result.get("status") == "error":
+            logger.error(f"Python execution error: {result.get('message')}")
+            raise RuntimeError(f"Python execution error: {result.get('message')}")
 
 
 @app.get("/health")
