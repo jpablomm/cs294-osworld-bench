@@ -68,7 +68,8 @@ async def send_a2a_task(
     white_agent_url: str,
     osworld_task_id: str,
     max_steps: int = 15,
-    vm_image: str = "osworld-golden-v3-gnome"
+    vm_image: str = "osworld-golden-v3-gnome",
+    domain: str = None
 ) -> Dict[str, Any]:
     """
     Send A2A task to green agent and wait for results
@@ -80,6 +81,7 @@ async def send_a2a_task(
         osworld_task_id: OSWorld task to execute
         max_steps: Maximum steps for assessment
         vm_image: Golden VM image name
+        domain: OSWorld task domain (os, chrome, vlc, etc.)
 
     Returns:
         Assessment results as A2A Message
@@ -99,6 +101,10 @@ async def send_a2a_task(
             "metrics": ["success", "steps", "time_sec"]
         }
     }
+
+    # Add domain if specified
+    if domain:
+        a2a_task["metadata"]["domain"] = domain
 
     try:
         async with httpx.AsyncClient(timeout=900.0) as client:  # 15 min timeout
@@ -182,6 +188,10 @@ async def main():
         default="osworld-golden-v3-gnome",
         help="Golden VM image name (default: osworld-golden-v3-gnome)"
     )
+    parser.add_argument(
+        "--domain",
+        help="OSWorld task domain (os, chrome, vlc, etc.)"
+    )
 
     args = parser.parse_args()
 
@@ -215,7 +225,8 @@ async def main():
             white_agent_url=args.white_agent_url,
             osworld_task_id=args.task_id,
             max_steps=args.max_steps,
-            vm_image=args.vm_image
+            vm_image=args.vm_image,
+            domain=args.domain
         )
 
         # Step 4: Display results

@@ -320,7 +320,7 @@ def _parse_actions(actions_str: str) -> Dict[str, Any]:
     if "DONE" in actions_str or "FAIL" in actions_str:
         return {"op": "done", "args": {}}
 
-    # Extract first pyautogui command from multi-line code blocks
+    # Extract first command from multi-line code blocks
     if '\n' in actions_str or 'import' in actions_str:
         lines = actions_str.split('\n')
         for line in lines:
@@ -328,14 +328,18 @@ def _parse_actions(actions_str: str) -> Dict[str, Any]:
             # Skip empty lines, imports, and comments
             if not line or line.startswith('#') or line.startswith('import') or line.startswith('time.'):
                 continue
-            # Found a pyautogui command - use it
-            if line.startswith('pyautogui.'):
+            # Found a command - use it (with or without pyautogui prefix)
+            if line.startswith('pyautogui.') or any(line.startswith(f'{cmd}(') for cmd in ['click', 'type_text', 'hotkey', 'scroll', 'doubleClick', 'rightClick']):
                 actions_str = line
                 break
         else:
-            # No pyautogui command found
-            logger.warning(f"No pyautogui command found in code block, defaulting to wait")
+            # No command found
+            logger.warning(f"No command found in code block, defaulting to wait")
             return {"op": "wait", "args": {"duration": 1.0}}
+
+    # Strip comments from action string
+    if '#' in actions_str:
+        actions_str = actions_str.split('#')[0].strip()
 
     # Parse move actions
     if match := re.match(r'pyautogui\.moveRel\((-?\d+),\s*(-?\d+)\)', actions_str):
@@ -343,41 +347,47 @@ def _parse_actions(actions_str: str) -> Dict[str, Any]:
         logger.info("moveRel detected - treating as wait since OSWorld doesn't support relative movement")
         return {"op": "wait", "args": {"duration": 0.5}}
 
-    # Parse click actions
-    if match := re.match(r'pyautogui\.click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
+    # Parse click actions (with or without pyautogui prefix)
+    if match := re.match(r'(?:pyautogui\.)?click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
         x, y = int(match.group(1)), int(match.group(2))
         return {"op": "click", "args": {"x": x, "y": y}}
 
-    if match := re.match(r'pyautogui\.click\(\)', actions_str):
+    if match := re.match(r'(?:pyautogui\.)?click\(\)', actions_str):
         return {"op": "click", "args": {}}
 
     # Parse double click
-    if match := re.match(r'pyautogui\.doubleClick\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
+    if match := re.match(r'(?:pyautogui\.)?doubleClick\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
         x, y = int(match.group(1)), int(match.group(2))
         return {"op": "double_click", "args": {"x": x, "y": y}}
 
     # Parse right click
-    if match := re.match(r'pyautogui\.rightClick\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
+    if match := re.match(r'(?:pyautogui\.)?rightClick\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
         x, y = int(match.group(1)), int(match.group(2))
         return {"op": "right_click", "args": {"x": x, "y": y}}
 
     # Parse type/write actions
-    if match := re.match(r'pyautogui\.(?:typewrite|write)\(["\'](.+?)["\']\)', actions_str):
+    if match := re.match(r'(?:pyautogui\.)?(?:typewrite|write|type_text)\(["\'](.+?)["\']\)', actions_str):
         text = match.group(1)
         return {"op": "type", "args": {"text": text}}
 
     # Parse hotkey actions
-    if match := re.match(r'pyautogui\.hotkey\(["\'](.+?)["\'],\s*["\'](.+?)["\']\)', actions_str):
+    if match := re.match(r'(?:pyautogui\.)?hotkey\(["\'](.+?)["\'],\s*["\'](.+?)["\']\)', actions_str):
         key1, key2 = match.group(1), match.group(2)
         return {"op": "hotkey", "args": {"keys": [key1, key2]}}
 
+    # Parse hotkey with array syntax: hotkey(['super']) or hotkey(['ctrl', 'c'])
+    if match := re.match(r'(?:pyautogui\.)?hotkey\(\[([^\]]+)\]\)', actions_str):
+        keys_str = match.group(1)
+        keys = [k.strip().strip("'\"") for k in keys_str.split(',')]
+        return {"op": "hotkey", "args": {"keys": keys}}
+
     # Parse press actions (handles both simple and with presses parameter)
-    if match := re.match(r'pyautogui\.press\(["\'](.+?)["\'](?:,\s*presses=\d+)?(?:,\s*interval=[\d.]+)?\)', actions_str):
+    if match := re.match(r'(?:pyautogui\.)?press\(["\'](.+?)["\'](?:,\s*presses=\d+)?(?:,\s*interval=[\d.]+)?\)', actions_str):
         key = match.group(1)
         return {"op": "hotkey", "args": {"keys": [key]}}
 
     # Parse scroll
-    if match := re.match(r'pyautogui\.scroll\((-?\d+)\)', actions_str):
+    if match := re.match(r'(?:pyautogui\.)?scroll\((-?\d+)\)', actions_str):
         amount = int(match.group(1))
         return {"op": "scroll", "args": {"amount": amount}}
 

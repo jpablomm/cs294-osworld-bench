@@ -9,15 +9,23 @@ import json
 import logging
 import asyncio
 import httpx
+import sys
+from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+# Add OSWorld to path for SetupController
+sys.path.insert(0, str(Path(__file__).parent.parent / "vendor" / "OSWorld"))
+
 # Import existing orchestrator components
 from .vm_manager import VMManager
 from .storage import StorageManager
 from .task_executor import TaskExecutor
+
+# Import OSWorld SetupController
+from desktop_env.controllers.setup import SetupController
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -210,6 +218,53 @@ def _parse_task_config(task: A2ATask) -> Dict[str, Any]:
     return config
 
 
+def _execute_osworld_setup(vm_ip: str, task_config: list) -> bool:
+    """
+    Execute OSWorld task setup using SetupController
+
+    Args:
+        vm_ip: VM IP address
+        task_config: List of setup config dicts from OSWorld task JSON
+
+    Returns:
+        True if setup succeeded, False otherwise
+
+    Raises:
+        Exception if setup fails
+    """
+    if not task_config:
+        logger.info("No setup configuration - skipping setup phase")
+        return True
+
+    logger.info(f"Executing OSWorld task setup with {len(task_config)} steps...")
+
+    try:
+        # Create cache directory for SetupController
+        cache_dir = Path("cache")
+        cache_dir.mkdir(exist_ok=True)
+        logger.info(f"Created cache directory: {cache_dir.absolute()}")
+
+        # Create SetupController
+        setup_controller = SetupController(
+            vm_ip=vm_ip,
+            server_port=5000
+        )
+
+        # Execute setup
+        success = setup_controller.setup(task_config)
+
+        if success:
+            logger.info("✓ OSWorld task setup completed successfully")
+        else:
+            logger.error("✗ OSWorld task setup failed")
+
+        return success
+
+    except Exception as e:
+        logger.error(f"Setup execution failed: {e}", exc_info=True)
+        raise
+
+
 async def _execute_assessment(
     assessment_id: str,
     config: Dict[str, Any]
@@ -257,6 +312,37 @@ async def _execute_assessment(
 
         if not vm_ready:
             raise Exception("VM did not become ready in time")
+
+        # Step 2.5: Execute OSWorld task setup
+        # Load full OSWorld task with config
+        try:
+            logger.info("Loading full OSWorld task configuration...")
+            osworld_task = task_executor.load_osworld_task(
+                config["osworld_task_id"],
+                domain=config.get("domain")
+            )
+
+            # Execute setup if config exists
+            if "config" in osworld_task and osworld_task["config"]:
+                setup_success = await asyncio.to_thread(
+                    _execute_osworld_setup,
+                    vm_info["vm_ip"],
+                    osworld_task["config"]
+                )
+
+                if not setup_success:
+                    raise Exception("Task setup failed")
+            else:
+                logger.info("No setup config in task - skipping setup phase")
+
+        except FileNotFoundError:
+            logger.warning(
+                f"Full OSWorld task not found for {config['osworld_task_id']} - "
+                "skipping setup phase"
+            )
+        except Exception as e:
+            logger.error(f"Setup phase failed: {e}")
+            raise
 
         # Step 3: Send task to white agent with tool descriptions (Approach II)
         logger.info("Sending task to white agent with tool descriptions...")

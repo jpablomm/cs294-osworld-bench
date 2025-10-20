@@ -20,16 +20,24 @@ logger = logging.getLogger(__name__)
 class TaskExecutor:
     """Executes OSWorld assessment tasks"""
 
-    def __init__(self, tasks_dir: str = "tasks"):
+    def __init__(self, tasks_dir: str = "tasks", osworld_examples_dir: str = None):
         """
         Initialize Task Executor
 
         Args:
             tasks_dir: Directory containing task JSON files
+            osworld_examples_dir: Directory containing full OSWorld evaluation examples
         """
         self.tasks_dir = Path(tasks_dir)
         if not self.tasks_dir.exists():
             logger.warning(f"Tasks directory does not exist: {self.tasks_dir}")
+
+        # Default to vendor/OSWorld/evaluation_examples/examples
+        if osworld_examples_dir is None:
+            osworld_examples_dir = Path(__file__).parent.parent / "vendor" / "OSWorld" / "evaluation_examples" / "examples"
+        self.osworld_examples_dir = Path(osworld_examples_dir)
+        if not self.osworld_examples_dir.exists():
+            logger.warning(f"OSWorld examples directory does not exist: {self.osworld_examples_dir}")
 
     def load_task(self, task_id: str) -> Dict[str, Any]:
         """
@@ -53,6 +61,44 @@ class TaskExecutor:
 
         logger.info(f"Loaded task {task_id}: {task.get('description', 'No description')}")
         return task
+
+    def load_osworld_task(self, task_id: str, domain: str = None) -> Dict[str, Any]:
+        """
+        Load full OSWorld task JSON with config from evaluation_examples
+
+        Args:
+            task_id: Task identifier
+            domain: Task domain (os, chrome, vlc, etc.). If None, searches all domains.
+
+        Returns:
+            Full OSWorld task configuration dict with config array
+
+        Raises:
+            FileNotFoundError if task does not exist
+        """
+        # If domain specified, only check that domain
+        if domain:
+            task_file = self.osworld_examples_dir / domain / f"{task_id}.json"
+            if task_file.exists():
+                with open(task_file, "r") as f:
+                    task = json.load(f)
+                logger.info(f"Loaded OSWorld task {task_id} from domain {domain}")
+                return task
+            raise FileNotFoundError(f"OSWorld task not found: {task_id} in domain {domain}")
+
+        # Otherwise, search all domains
+        for domain_dir in self.osworld_examples_dir.iterdir():
+            if not domain_dir.is_dir():
+                continue
+
+            task_file = domain_dir / f"{task_id}.json"
+            if task_file.exists():
+                with open(task_file, "r") as f:
+                    task = json.load(f)
+                logger.info(f"Loaded OSWorld task {task_id} from domain {domain_dir.name}")
+                return task
+
+        raise FileNotFoundError(f"OSWorld task not found: {task_id} in any domain")
 
     def run_assessment(
         self,
