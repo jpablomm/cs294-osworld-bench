@@ -13,3 +13,7 @@ google-cloud-compute>=1.15.0
 google-cloud-storage>=2.14.0
 google-auth>=2.27.0
 
+# AgentBeats compliance - A2A protocol and MCP
+a2a>=0.1.0
+mcp>=0.1.0
+
