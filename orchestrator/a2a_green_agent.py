@@ -316,6 +316,7 @@ async def _execute_assessment(
 
         # Step 2.5: Execute OSWorld task setup
         # Load full OSWorld task with config
+        osworld_task = None
         try:
             logger.info("Loading full OSWorld task configuration...")
             osworld_task = task_executor.load_osworld_task(
@@ -351,8 +352,12 @@ async def _execute_assessment(
         # Build tool descriptions for OSWorld API
         tools = _build_osworld_tool_descriptions(vm_info["vm_ip"])
 
-        # Load task description
-        task = task_executor.load_task(config["osworld_task_id"])
+        # Get task description - prefer osworld_task if available
+        if osworld_task:
+            task = {"instruction": osworld_task.get("instruction", "Complete the task")}
+        else:
+            # Fallback to loading from tasks directory
+            task = task_executor.load_task(config["osworld_task_id"])
 
         # Create A2A task message with tools
         white_agent_task = {

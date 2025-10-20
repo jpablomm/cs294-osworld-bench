@@ -400,11 +400,20 @@ async def stream_assessment(assessment_id: str):
     )
 
 
-@app.get("/api/artifacts/{assessment_id}/{filename}")
-def get_artifact(assessment_id: str, filename: str):
+@app.get("/api/artifacts/{assessment_id}/{filepath:path}")
+def get_artifact(assessment_id: str, filepath: str):
     """Get assessment artifact (screenshot, etc.)"""
     artifacts_dir = Path(f"./temp_artifacts/{assessment_id}")
-    file_path = artifacts_dir / filename
+    file_path = artifacts_dir / filepath
+
+    # Security: ensure the path is within artifacts_dir
+    try:
+        file_path = file_path.resolve()
+        artifacts_dir = artifacts_dir.resolve()
+        if not str(file_path).startswith(str(artifacts_dir)):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file path")
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Artifact not found")

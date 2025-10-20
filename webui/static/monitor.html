@@ -254,6 +254,42 @@
             );
         }
 
+        // Helper to format action for display
+        function formatAction(action) {
+            if (!action) return 'unknown';
+
+            // If it's already a string, return it
+            if (typeof action === 'string') return action;
+
+            // If it's an object, try to extract meaningful info
+            if (typeof action === 'object') {
+                // Try common action properties
+                if (action.action) return action.action;
+                if (action.action_type) return action.action_type;
+                if (action.type) return action.type;
+
+                // Otherwise, create a readable summary
+                const keys = Object.keys(action);
+                if (keys.length === 0) return 'unknown';
+
+                // For common action formats, create a nice display
+                if (keys.includes('x') && keys.includes('y')) {
+                    const actionType = action.action || action.type || 'ACTION';
+                    return `${actionType} (${action.x}, ${action.y})`;
+                }
+
+                // Fallback: show first key-value pair or first key
+                const firstKey = keys[0];
+                const firstValue = action[firstKey];
+                if (typeof firstValue === 'string' || typeof firstValue === 'number') {
+                    return `${firstKey}: ${firstValue}`;
+                }
+                return firstKey;
+            }
+
+            return String(action);
+        }
+
         // Render trajectory
         function renderTrajectory(trajectory) {
             const container = document.getElementById('trajectory-container');
@@ -263,25 +299,60 @@
                 return;
             }
 
-            const html = trajectory.map((step, idx) => `
+            const html = trajectory.map((step, idx) => {
+                // Generate screenshot path (green agent saves as step_N.png directly in artifacts dir)
+                const stepNum = step.step || (idx + 1);
+                const screenshotPath = `/api/artifacts/${assessmentId}/step_${stepNum}.png`;
+
+                return `
                 <div style="padding: 1rem; border-bottom: 1px solid var(--border-color);">
-                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.75rem;">
                         <div>
                             <strong>Step ${idx + 1}</strong>
                             <div style="margin-top: 0.5rem;">
-                                <span class="badge badge-secondary">${step.action || 'unknown'}</span>
+                                <span class="badge badge-secondary">${formatAction(step.action)}</span>
                             </div>
+                            ${step.action && typeof step.action === 'object' ? `
+                                <details style="margin-top: 0.5rem;">
+                                    <summary style="cursor: pointer; font-size: 0.75rem; color: var(--text-secondary);">Action Details</summary>
+                                    <pre style="margin-top: 0.25rem; padding: 0.5rem; background: var(--bg-color); border-radius: 0.25rem; font-size: 0.75rem; overflow-x: auto;">${JSON.stringify(step.action, null, 2)}</pre>
+                                </details>
+                            ` : ''}
                         </div>
                         <span class="text-small text-muted">${step.timestamp || ''}</span>
                     </div>
-                    ${step.observation ? `
-                        <div style="margin-top: 0.5rem;">
-                            <div class="text-small text-muted">Observation:</div>
-                            <pre style="margin-top: 0.25rem; padding: 0.5rem; background: var(--bg-color); border-radius: 0.25rem; font-size: 0.75rem; overflow-x: auto;">${JSON.stringify(step.observation, null, 2)}</pre>
+
+                    <!-- Agent Reasoning/Response -->
+                    ${step.content ? `
+                        <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--bg-color); border-left: 3px solid var(--primary-color); border-radius: 0.25rem;">
+                            <div style="font-weight: 500; font-size: 0.875rem; margin-bottom: 0.5rem; color: var(--text-secondary);">Agent Response:</div>
+                            <div style="white-space: pre-wrap; font-size: 0.875rem; line-height: 1.5;">${step.content}</div>
                         </div>
                     ` : ''}
+
+                    <!-- Screenshot -->
+                    <div style="margin-top: 0.75rem;">
+                        <img
+                            src="${screenshotPath}"
+                            alt="Step ${idx + 1} screenshot"
+                            style="width: 100%; max-width: 800px; border: 1px solid var(--border-color); border-radius: 0.375rem; cursor: pointer;"
+                            onclick="window.open('${screenshotPath}', '_blank')"
+                            onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"
+                        >
+                        <div style="display: none; padding: 1rem; background: var(--bg-color); border-radius: 0.375rem; text-align: center; color: var(--text-secondary); font-size: 0.875rem;">
+                            Screenshot not available
+                        </div>
+                    </div>
+
+                    ${step.observation ? `
+                        <details style="margin-top: 0.75rem;">
+                            <summary style="cursor: pointer; font-size: 0.875rem; color: var(--text-secondary);">Observation Data</summary>
+                            <pre style="margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-color); border-radius: 0.25rem; font-size: 0.75rem; overflow-x: auto;">${JSON.stringify(step.observation, null, 2)}</pre>
+                        </details>
+                    ` : ''}
                 </div>
-            `).join('');
+                `;
+            }).join('');
 
             container.innerHTML = html;
         }
