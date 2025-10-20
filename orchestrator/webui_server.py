@@ -198,6 +198,33 @@ def list_tasks(domain: Optional[str] = None):
     return tasks
 
 
+@app.get("/api/tasks/{task_id}")
+def get_task_details(task_id: str, domain: Optional[str] = None):
+    """Get full task details including evaluation configuration"""
+
+    if not OSWORLD_EXAMPLES_DIR.exists():
+        raise HTTPException(status_code=404, detail="OSWorld examples directory not found")
+
+    # If domain provided, search in that domain only
+    if domain:
+        task_file = OSWORLD_EXAMPLES_DIR / domain / f"{task_id}.json"
+        if task_file.exists():
+            with open(task_file) as f:
+                return json.load(f)
+
+    # Otherwise search all domains
+    for domain_dir in OSWORLD_EXAMPLES_DIR.iterdir():
+        if not domain_dir.is_dir():
+            continue
+
+        task_file = domain_dir / f"{task_id}.json"
+        if task_file.exists():
+            with open(task_file) as f:
+                return json.load(f)
+
+    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+
 @app.get("/api/assessments")
 def list_assessments(
     limit: int = 100,

@@ -46,6 +46,27 @@ class OSWorldAPI {
     }
 
     /**
+     * Get full task details including evaluation configuration
+     * @param {string} taskId - Task ID
+     * @param {string} domain - Optional domain hint
+     */
+    async getTaskDetails(taskId, domain = null) {
+        const url = new URL(`${API_BASE}/api/tasks/${taskId}`);
+        if (domain) {
+            url.searchParams.append('domain', domain);
+        }
+
+        const response = await fetch(url);
+        if (!response.ok) {
+            if (response.status === 404) {
+                throw new Error('Task not found');
+            }
+            throw new Error(`Failed to fetch task details: ${response.statusText}`);
+        }
+        return response.json();
+    }
+
+    /**
      * List assessments with optional filtering
      * @param {Object} filters - Filter parameters
      */

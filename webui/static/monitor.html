@@ -51,6 +51,16 @@
             </div>
         </div>
 
+        <!-- Evaluation Criteria -->
+        <div class="card" id="evaluation-card" style="display: none;">
+            <div class="card-header">
+                <h3 class="card-title">📋 Evaluation Criteria</h3>
+            </div>
+            <div id="evaluation-container">
+                <p class="text-center text-muted" style="padding: 2rem;">Loading...</p>
+            </div>
+        </div>
+
         <!-- Trajectory -->
         <div class="card">
             <div class="card-header">
@@ -109,6 +119,73 @@
                 : '<span class="badge badge-danger">Failed</span>';
         }
 
+        // Format evaluation criteria (same as launch.html)
+        function formatEvaluation(evaluator) {
+            if (!evaluator) {
+                return '<p style="color: var(--text-secondary); padding: 1rem;">No evaluation criteria defined</p>';
+            }
+
+            let html = '<div style="padding: 1rem;">';
+
+            // Evaluation function/method
+            html += `<div style="margin-bottom: 0.75rem;">
+                <strong>Method:</strong>
+                <span class="badge badge-info" style="margin-left: 0.5rem;">${evaluator.func || 'N/A'}</span>
+            </div>`;
+
+            // Expected result
+            if (evaluator.expected) {
+                html += '<div style="margin-bottom: 0.75rem;"><strong>Expected Result:</strong><div style="margin-top: 0.25rem; padding: 0.5rem; background: var(--bg-color); border-radius: 0.25rem; font-family: monospace; font-size: 0.75rem;">';
+
+                if (evaluator.expected.type === 'rule' && evaluator.expected.rules) {
+                    const rules = evaluator.expected.rules;
+                    if (rules.expected) {
+                        if (Array.isArray(rules.expected)) {
+                            html += rules.expected.map(r => `• ${r}`).join('<br>');
+                        } else {
+                            html += rules.expected;
+                        }
+                    } else {
+                        html += JSON.stringify(rules, null, 2);
+                    }
+                } else {
+                    html += JSON.stringify(evaluator.expected, null, 2);
+                }
+
+                html += '</div></div>';
+            }
+
+            // Result source (what will be evaluated)
+            if (evaluator.result) {
+                html += '<div style="margin-bottom: 0.75rem;"><strong>What Gets Evaluated:</strong><div style="margin-top: 0.25rem; padding: 0.5rem; background: var(--bg-color); border-radius: 0.25rem; font-size: 0.75rem;">';
+
+                const resultType = evaluator.result.type;
+                if (resultType === 'vm_command_line' && evaluator.result.command) {
+                    html += `<strong>Command:</strong> <code>${evaluator.result.command}</code>`;
+                } else if (resultType === 'vm_file' && evaluator.result.path) {
+                    html += `<strong>File:</strong> ${evaluator.result.path}`;
+                } else if (resultType === 'active_url_from_accessTree') {
+                    html += '<strong>Active browser URL</strong>';
+                } else {
+                    html += `<strong>Type:</strong> ${resultType || 'N/A'}`;
+                    if (evaluator.result.path) html += `<br><strong>Path:</strong> ${evaluator.result.path}`;
+                    if (evaluator.result.command) html += `<br><strong>Command:</strong> ${evaluator.result.command}`;
+                }
+
+                html += '</div></div>';
+            }
+
+            // Additional options
+            if (evaluator.options) {
+                html += '<details style="margin-top: 0.5rem;"><summary style="cursor: pointer; font-size: 0.75rem; color: var(--text-secondary);">Advanced Options</summary>';
+                html += `<pre style="margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-color); border-radius: 0.25rem; font-size: 0.625rem; overflow-x: auto;">${JSON.stringify(evaluator.options, null, 2)}</pre>`;
+                html += '</details>';
+            }
+
+            html += '</div>';
+            return html;
+        }
+
         // Load assessment data
         async function loadAssessment() {
             try {
@@ -116,6 +193,19 @@
 
                 // Update title
                 document.getElementById('assessment-title').textContent = `Assessment: ${assessment.id}`;
+
+                // Load evaluation criteria
+                if (assessment.task_id && assessment.domain) {
+                    try {
+                        const taskDetails = await api.getTaskDetails(assessment.task_id, assessment.domain);
+                        if (taskDetails.evaluator) {
+                            document.getElementById('evaluation-card').style.display = 'block';
+                            document.getElementById('evaluation-container').innerHTML = formatEvaluation(taskDetails.evaluator);
+                        }
+                    } catch (error) {
+                        console.warn('Failed to load evaluation criteria:', error);
+                    }
+                }
 
                 // Update info section
                 const infoHtml = `
