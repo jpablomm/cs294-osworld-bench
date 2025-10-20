@@ -106,6 +106,7 @@ class TaskExecutor:
         vm_ip: str,
         white_agent_url: str,
         artifacts_dir: str,
+        domain: str = None,
     ) -> Dict[str, Any]:
         """
         Run assessment on VM using White Agent + Green Agent workflow
@@ -115,6 +116,7 @@ class TaskExecutor:
             vm_ip: VM external IP address
             white_agent_url: White Agent API URL
             artifacts_dir: Directory to store artifacts
+            domain: Optional OSWorld task domain for loading full task config
 
         Returns:
             Results dictionary with success, steps, time_sec, etc.
@@ -132,6 +134,16 @@ class TaskExecutor:
                 "failure_reason": str(e),
                 "artifacts": {},
             }
+
+        # Try to load full OSWorld task with evaluator config (optional)
+        osworld_task = None
+        try:
+            osworld_task = self.load_osworld_task(task_id, domain=domain)
+            logger.info(f"Loaded full OSWorld task config for evaluation")
+        except FileNotFoundError:
+            logger.info(f"Full OSWorld task not found for {task_id}, evaluation will use simplified check")
+        except Exception as e:
+            logger.warning(f"Error loading full OSWorld task: {e}, evaluation will use simplified check")
 
         # Create artifacts directory
         artifacts_path = Path(artifacts_dir)
@@ -178,7 +190,8 @@ class TaskExecutor:
                 task,
                 white_decide,
                 str(artifacts_path),
-                white_agent_url=white_agent_url
+                white_agent_url=white_agent_url,
+                osworld_task=osworld_task
             )
 
             logger.info(

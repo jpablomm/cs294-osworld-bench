@@ -90,7 +90,8 @@ def run_osworld_native(
     task: Dict[str, Any],
     white_decide,
     artifacts_dir: str | None = None,
-    white_agent_url: str | None = None
+    white_agent_url: str | None = None,
+    osworld_task: Dict[str, Any] | None = None
 ) -> Dict[str, Any]:
     """
     Run OSWorld assessment using native REST API (port 5000).
@@ -100,6 +101,7 @@ def run_osworld_native(
         white_decide: Callback function(obs) -> action
         artifacts_dir: Directory to save screenshots
         white_agent_url: URL of White Agent (unused, kept for compatibility)
+        osworld_task: Full OSWorld task config with evaluator (optional)
 
     Returns:
         Dictionary with success, steps, time_sec, etc.
@@ -217,8 +219,44 @@ def run_osworld_native(
             if OSWORLD_SLEEP_AFTER_EXEC > 0:
                 time.sleep(OSWORLD_SLEEP_AFTER_EXEC)
 
-        # Check if task was successful (simplified - would need actual evaluation)
-        success = 1 if failure is None and steps > 0 else 0
+        # Evaluate task success using OSWorld evaluation system
+        if osworld_task and "evaluator" in osworld_task:
+            logger.info("Running OSWorld evaluation...")
+            try:
+                from .osworld_evaluator import evaluate_task
+
+                # Extract VM IP from OSWORLD_SERVER_URL (format: http://IP:PORT)
+                vm_ip = OSWORLD_SERVER_URL.split("//")[1].split(":")[0]
+
+                # Run OSWorld evaluation
+                evaluation_score = evaluate_task(
+                    vm_ip=vm_ip,
+                    evaluator_config=osworld_task["evaluator"],
+                    task_id=osworld_task.get("id", task.get("id", "unknown")),
+                    server_port=5000,
+                    cache_dir="cache"
+                )
+
+                logger.info(f"OSWorld evaluation score: {evaluation_score}")
+
+                # Success if score >= 1.0
+                success = 1 if evaluation_score >= 1.0 else 0
+
+                # Store evaluation score in failure reason if failed
+                if success == 0 and failure is None:
+                    failure = f"evaluation_failed_score_{evaluation_score}"
+
+            except Exception as e:
+                logger.error(f"Evaluation error: {e}", exc_info=True)
+                # Fall back to simplified check if evaluation fails
+                logger.warning("Falling back to simplified success check")
+                success = 1 if failure is None and steps > 0 else 0
+                if success == 1:
+                    failure = f"evaluation_error: {e}"
+        else:
+            # Fall back to simplified check if no evaluator config
+            logger.info("No evaluator config found, using simplified success check")
+            success = 1 if failure is None and steps > 0 else 0
 
     except Exception as e:
         logger.error(f"Native OSWorld error: {e}", exc_info=True)
@@ -272,7 +310,8 @@ def run_osworld(
     task: Dict[str, Any],
     white_decide,
     artifacts_dir: str | None = None,
-    white_agent_url: str | None = None
+    white_agent_url: str | None = None,
+    osworld_task: Dict[str, Any] | None = None
 ) -> Dict[str, Any]:
     """
     Run OSWorld assessment with White Agent.
@@ -282,6 +321,7 @@ def run_osworld(
         white_decide: Callback function (unused in real mode, kept for compatibility)
         artifacts_dir: Directory to save artifacts
         white_agent_url: URL of White Agent HTTP API (required for Docker mode)
+        osworld_task: Full OSWorld task config with evaluator (optional)
 
     Returns:
         Dictionary with assessment results
@@ -297,7 +337,7 @@ def run_osworld(
 
     if USE_NATIVE or OSWORLD_PROVIDER == "native":
         logger.info("Using NATIVE OSWorld mode (REST API)")
-        return run_osworld_native(task, white_decide, artifacts_dir, white_agent_url)
+        return run_osworld_native(task, white_decide, artifacts_dir, white_agent_url, osworld_task)
 
     # Real OSWorld path: use OSWorld as a library
     # Use absolute path relative to this file's location

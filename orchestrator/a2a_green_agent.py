@@ -214,6 +214,7 @@ def _parse_task_config(task: A2ATask) -> Dict[str, Any]:
     config["max_steps"] = task.metadata.get("max_steps", 15)
     config["vm_image"] = task.metadata.get("vm_image", "osworld-golden-v3-gnome")
     config["metrics"] = task.metadata.get("metrics", ["success", "steps", "time_sec"])
+    config["domain"] = task.metadata.get("domain")  # OSWorld task domain (os, chrome, vlc, etc.)
 
     return config
 
@@ -307,7 +308,7 @@ async def _execute_assessment(
         vm_ready = await asyncio.to_thread(
             vm_manager.wait_for_vm_ready,
             vm_info["vm_ip"],
-            timeout=120
+            timeout=300  # Increased from 120 to 300 seconds (5 minutes)
         )
 
         if not vm_ready:
@@ -378,7 +379,41 @@ async def _execute_assessment(
             config.get("max_steps", 15)
         )
 
-        # Step 4: Add metadata
+        # Step 4: Evaluate task success using OSWorld evaluation system
+        if osworld_task and "evaluator" in osworld_task:
+            logger.info("Running OSWorld evaluation...")
+            try:
+                from green_agent.osworld_evaluator import evaluate_task
+
+                # Run OSWorld evaluation
+                evaluation_score = await asyncio.to_thread(
+                    evaluate_task,
+                    vm_ip=vm_info["vm_ip"],
+                    evaluator_config=osworld_task["evaluator"],
+                    task_id=osworld_task.get("id", config["osworld_task_id"]),
+                    server_port=5000,
+                    cache_dir="cache"
+                )
+
+                logger.info(f"OSWorld evaluation score: {evaluation_score}")
+
+                # Update success based on evaluation (score >= 1.0 = success)
+                result["success"] = 1 if evaluation_score >= 1.0 else 0
+                result["evaluation_score"] = evaluation_score
+                result["evaluation_method"] = "osworld_benchmark"
+
+                if result["success"] == 0 and "failure_reason" not in result:
+                    result["failure_reason"] = f"evaluation_failed_score_{evaluation_score}"
+
+            except Exception as e:
+                logger.error(f"Evaluation error: {e}", exc_info=True)
+                logger.warning("Evaluation failed - using white agent result as-is")
+                result["evaluation_error"] = str(e)
+        else:
+            logger.info("No evaluator config found, using simplified success check from white agent")
+            result["evaluation_method"] = "simplified"
+
+        # Step 5: Add metadata
         result["vm_cost"] = vm_manager.get_vm_cost(time.time() - start_time)
         result["vm_info"] = vm_info
         result["assessment_id"] = assessment_id
