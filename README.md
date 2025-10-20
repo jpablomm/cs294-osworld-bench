@@ -108,6 +108,129 @@ See [VM Orchestrator section](#-vm-orchestrator-cloud-run) below for complete de
 
 ---
 
+## 🤝 AgentBeats Compliance (A2A Protocol)
+
+**Status**: Phase 1 & 2 Complete ✅ | **Compliance**: ~65%
+
+This system now implements the **AgentBeats A2A protocol** for standardized agent evaluation. The green agent orchestrates assessments while white agents execute tasks, communicating via A2A messages with embedded tool descriptions.
+
+### Architecture
+
+```
+┌────────────────────────────────────────────┐
+│  A2A Green Agent (port 8001)               │
+│  - Receives A2A Tasks                      │
+│  - Creates VMs from golden images          │
+│  - Orchestrates assessment workflow        │
+│  - Sends tool descriptions in messages     │
+│  - Reports metrics via A2A Messages        │
+└─────────────────┬──────────────────────────┘
+                  │ A2A Protocol
+                  │ (Tasks → Messages)
+                  ▼
+┌────────────────────────────────────────────┐
+│  A2A White Agent (port 9001)               │
+│  - Receives observations + tool specs      │
+│  - Decides actions based on screenshots    │
+│  - Returns actions via A2A Messages        │
+│  - Executes desktop automation tasks       │
+└────────────────────────────────────────────┘
+```
+
+### Features
+
+- ✅ **Agent Cards**: Self-describing capabilities and protocols
+- ✅ **A2A Protocol**: Standardized Task/Message communication
+- ✅ **Tool Descriptions in Messages**: Approach II from AgentBeats
+- ✅ **Full Assessment Workflow**: VM lifecycle + white agent orchestration
+- ✅ **Backward Compatible**: Existing REST APIs still work
+
+### Quick Start with A2A
+
+#### Option 1: Using the Launcher (Recommended)
+
+```bash
+# Terminal 1: Start green agent
+uvicorn orchestrator.a2a_green_agent:app --port 8001
+
+# Terminal 2: Start white agent
+uvicorn white_agent.a2a_adapter:app --port 9001
+
+# Terminal 3: Run assessment
+python launcher_a2a.py \
+  --task-id osworld-ubuntu-tiny \
+  --white-agent-url http://localhost:9001 \
+  --max-steps 15
+```
+
+#### Option 2: Interactive Demo
+
+```bash
+# Start both agents as above, then:
+python examples/a2a_demo.py
+```
+
+Walks you through agent cards, white agent interaction, and full assessment.
+
+#### Option 3: Manual API Calls
+
+```bash
+# Get agent card
+curl http://localhost:8001/agent-card
+
+# Send A2A task
+curl -X POST http://localhost:8001/task \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_id": "assess-001",
+    "message": "Run OSWorld assessment",
+    "metadata": {
+      "osworld_task_id": "osworld-ubuntu-tiny",
+      "white_agent_url": "http://localhost:9001",
+      "max_steps": 15
+    }
+  }'
+```
+
+### A2A Protocol Details
+
+**Green Agent Endpoints** (orchestrator/a2a_green_agent.py):
+- `GET /agent-card` - Returns capabilities, protocols, assessment types
+- `POST /task` - Accepts A2A task, orchestrates VM + assessment, returns metrics
+- `GET /health` - Health check with protocol info
+- `GET /assessments` - List active assessments (debug)
+
+**White Agent Endpoints** (white_agent/a2a_adapter.py):
+- `GET /agent-card` - Returns capabilities for task execution
+- `POST /task` - Receives observation, returns action as A2A message
+- `POST /reset` - Clears conversation contexts
+- `GET /contexts` - List active contexts (debug)
+
+**Tool Descriptions (Approach II)**:
+
+The green agent sends OSWorld tool specifications embedded in the A2A task message:
+- `screenshot` - Capture desktop state
+- `execute_python` - Run Python code in VM
+- `execute_command` - Run shell commands
+- `click` - Mouse click at coordinates
+- `type_text` - Keyboard input
+- `hotkey` - Keyboard shortcuts
+- `wait` - Delay between actions
+
+See `AGENTBEATS_PROGRESS.md` for complete implementation details.
+
+### Files
+
+```
+orchestrator/a2a_green_agent.py   (780 lines) - Green agent A2A wrapper
+white_agent/a2a_adapter.py        (295 lines) - White agent A2A wrapper
+launcher_a2a.py                   (214 lines) - CLI launcher
+examples/a2a_demo.py              (217 lines) - Interactive demo
+AGENTBEATS_PROGRESS.md            - Implementation tracking
+```
+
+---
+
 ## 🧪 Running OSWorld Benchmarks with GPT-4o
 
 Run real OSWorld evaluation tasks with GPT-4o vision-language model:

@@ -101,14 +101,23 @@ async def handle_a2a_task(task: A2ATask) -> A2AMessage:
     # Initialize or retrieve conversation context
     context_id = task.context_id or task.task_id
     if context_id not in conversation_contexts:
+        # Extract tool descriptions if provided (Approach II)
+        tools = task.metadata.get("tools", []) if task.metadata else []
+
         conversation_contexts[context_id] = {
             "step": 0,
             "task_id": task.task_id,
-            "created_at": str(uuid.uuid4())
+            "created_at": str(uuid.uuid4()),
+            "tools": tools,
+            "osworld_server": task.metadata.get("osworld_server") if task.metadata else None
         }
         # Reset internal state for new task
         reset()
-        logger.info(f"New conversation context created: {context_id}")
+
+        if tools:
+            logger.info(f"New conversation context created: {context_id} with {len(tools)} tools")
+        else:
+            logger.info(f"New conversation context created: {context_id}")
 
     context = conversation_contexts[context_id]
     step = context["step"]
@@ -275,7 +284,9 @@ def list_contexts():
         "contexts": {
             ctx_id: {
                 "step": ctx["step"],
-                "task_id": ctx["task_id"]
+                "task_id": ctx["task_id"],
+                "tools_count": len(ctx.get("tools", [])),
+                "osworld_server": ctx.get("osworld_server")
             }
             for ctx_id, ctx in conversation_contexts.items()
         }
