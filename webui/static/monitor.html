@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor Assessment - OSWorld</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <h1>OSWorld Assessment System</h1>
+            <nav class="nav">
+                <a href="/">Dashboard</a>
+                <a href="/launch">Launch Assessment</a>
+                <a href="/results">Results</a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Assessment Header -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title" id="assessment-title">Loading...</h2>
+                <div class="flex gap-2">
+                    <button class="btn btn-sm btn-secondary" onclick="loadAssessment()">Refresh</button>
+                    <a href="/" class="btn btn-sm btn-secondary">Back to Dashboard</a>
+                </div>
+            </div>
+
+            <!-- Assessment Info -->
+            <div id="assessment-info">
+                <div class="spinner"></div>
+            </div>
+        </div>
+
+        <!-- Live Stream (for running assessments) -->
+        <div id="live-stream-card" class="card" style="display: none;">
+            <div class="card-header">
+                <h3 class="card-title">Live Updates</h3>
+                <div class="health-indicator">
+                    <div class="health-dot healthy" id="stream-indicator"></div>
+                    <span id="stream-status">Connected</span>
+                </div>
+            </div>
+            <div id="stream-events" style="max-height: 400px; overflow-y: auto;">
+                <!-- Events will be added here -->
+            </div>
+        </div>
+
+        <!-- Trajectory -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">Execution Trajectory</h3>
+            </div>
+            <div id="trajectory-container">
+                <p class="text-center text-muted" style="padding: 2rem;">No trajectory data yet</p>
+            </div>
+        </div>
+
+        <!-- Full Details -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">Full Details</h3>
+            </div>
+            <div id="details-container">
+                <div class="spinner"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/api.js"></script>
+    <script>
+        const assessmentId = window.location.pathname.split('/').pop();
+        let eventSource = null;
+
+        // Format helpers
+        function formatTime(isoString) {
+            if (!isoString) return 'N/A';
+            const date = new Date(isoString);
+            return date.toLocaleString();
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return 'N/A';
+            if (seconds < 60) return `${Math.round(seconds)}s`;
+            const minutes = Math.floor(seconds / 60);
+            const secs = Math.round(seconds % 60);
+            return `${minutes}m ${secs}s`;
+        }
+
+        function getStatusBadge(status) {
+            const badges = {
+                'running': 'badge-info',
+                'completed': 'badge-success',
+                'failed': 'badge-danger'
+            };
+            return `<span class="badge ${badges[status] || 'badge-secondary'}">${status}</span>`;
+        }
+
+        function getSuccessBadge(success) {
+            if (success === null || success === undefined) return '-';
+            return success === 1
+                ? '<span class="badge badge-success">Success</span>'
+                : '<span class="badge badge-danger">Failed</span>';
+        }
+
+        // Load assessment data
+        async function loadAssessment() {
+            try {
+                const assessment = await api.getAssessment(assessmentId);
+
+                // Update title
+                document.getElementById('assessment-title').textContent = `Assessment: ${assessment.id}`;
+
+                // Update info section
+                const infoHtml = `
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; padding: 1rem 0;">
+                        <div>
+                            <div class="text-small text-muted">Task ID</div>
+                            <div style="font-weight: 500; margin-top: 0.25rem;">${assessment.task_id}</div>
+                        </div>
+                        <div>
+                            <div class="text-small text-muted">Domain</div>
+                            <div style="font-weight: 500; margin-top: 0.25rem;">${assessment.domain || 'N/A'}</div>
+                        </div>
+                        <div>
+                            <div class="text-small text-muted">Status</div>
+                            <div style="margin-top: 0.25rem;">${getStatusBadge(assessment.status)}</div>
+                        </div>
+                        <div>
+                            <div class="text-small text-muted">Result</div>
+                            <div style="margin-top: 0.25rem;">${getSuccessBadge(assessment.success)}</div>
+                        </div>
+                        <div>
+                            <div class="text-small text-muted">Steps</div>
+                            <div style="font-weight: 500; margin-top: 0.25rem;">${assessment.steps || 0}</div>
+                        </div>
+                        <div>
+                            <div class="text-small text-muted">Time</div>
+                            <div style="font-weight: 500; margin-top: 0.25rem;">${formatDuration(assessment.time_sec)}</div>
+                        </div>
+                        <div>
+                            <div class="text-small text-muted">Started</div>
+                            <div style="font-weight: 500; margin-top: 0.25rem;">${formatTime(assessment.started_at)}</div>
+                        </div>
+                        <div>
+                            <div class="text-small text-muted">Completed</div>
+                            <div style="font-weight: 500; margin-top: 0.25rem;">${formatTime(assessment.completed_at)}</div>
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('assessment-info').innerHTML = infoHtml;
+
+                // Show live stream for running assessments
+                if (assessment.status === 'running') {
+                    document.getElementById('live-stream-card').style.display = 'block';
+                    if (!eventSource) {
+                        startLiveStream();
+                    }
+                } else {
+                    document.getElementById('live-stream-card').style.display = 'none';
+                    if (eventSource) {
+                        eventSource.close();
+                        eventSource = null;
+                    }
+                }
+
+                // Update trajectory
+                if (assessment.trajectory && assessment.trajectory.length > 0) {
+                    renderTrajectory(assessment.trajectory);
+                }
+
+                // Update full details
+                renderDetails(assessment);
+
+            } catch (error) {
+                document.getElementById('assessment-info').innerHTML = `
+                    <div class="alert alert-danger">Failed to load assessment: ${error.message}</div>
+                `;
+            }
+        }
+
+        // Start live stream
+        function startLiveStream() {
+            const streamEvents = document.getElementById('stream-events');
+            const streamIndicator = document.getElementById('stream-indicator');
+            const streamStatus = document.getElementById('stream-status');
+
+            eventSource = api.streamAssessment(
+                assessmentId,
+                (event) => {
+                    // Add event to stream
+                    const eventDiv = document.createElement('div');
+                    eventDiv.style.cssText = 'padding: 0.75rem; border-bottom: 1px solid var(--border-color);';
+
+                    const timestamp = new Date().toLocaleTimeString();
+
+                    if (event.type === 'connected') {
+                        eventDiv.innerHTML = `
+                            <span class="badge badge-info">CONNECTED</span>
+                            <span class="text-small text-muted" style="margin-left: 0.5rem;">${timestamp}</span>
+                        `;
+                    } else if (event.type === 'completed') {
+                        eventDiv.innerHTML = `
+                            <span class="badge badge-success">COMPLETED</span>
+                            <span class="text-small text-muted" style="margin-left: 0.5rem;">${timestamp}</span>
+                            <div style="margin-top: 0.5rem;">
+                                Success: ${event.data.success ? 'Yes' : 'No'} |
+                                Steps: ${event.data.steps || 0} |
+                                Time: ${formatDuration(event.data.time_sec)}
+                            </div>
+                        `;
+                        streamIndicator.classList.remove('healthy');
+                        streamIndicator.classList.add('unhealthy');
+                        streamStatus.textContent = 'Disconnected';
+
+                        // Reload assessment after completion
+                        setTimeout(loadAssessment, 1000);
+                    } else if (event.type === 'error') {
+                        eventDiv.innerHTML = `
+                            <span class="badge badge-danger">ERROR</span>
+                            <span class="text-small text-muted" style="margin-left: 0.5rem;">${timestamp}</span>
+                            <div style="margin-top: 0.5rem; color: var(--danger-color);">${event.error}</div>
+                        `;
+                        streamIndicator.classList.remove('healthy');
+                        streamIndicator.classList.add('unhealthy');
+                        streamStatus.textContent = 'Error';
+                    } else {
+                        eventDiv.innerHTML = `
+                            <span class="badge badge-secondary">${event.type.toUpperCase()}</span>
+                            <span class="text-small text-muted" style="margin-left: 0.5rem;">${timestamp}</span>
+                            <pre style="margin-top: 0.5rem; font-size: 0.75rem; overflow-x: auto;">${JSON.stringify(event.data, null, 2)}</pre>
+                        `;
+                    }
+
+                    streamEvents.prepend(eventDiv);
+
+                    // Keep only last 20 events
+                    while (streamEvents.children.length > 20) {
+                        streamEvents.removeChild(streamEvents.lastChild);
+                    }
+                },
+                (error) => {
+                    streamIndicator.classList.remove('healthy');
+                    streamIndicator.classList.add('unhealthy');
+                    streamStatus.textContent = 'Connection Error';
+                }
+            );
+        }
+
+        // Render trajectory
+        function renderTrajectory(trajectory) {
+            const container = document.getElementById('trajectory-container');
+
+            if (!trajectory || trajectory.length === 0) {
+                container.innerHTML = '<p class="text-center text-muted" style="padding: 2rem;">No trajectory data</p>';
+                return;
+            }
+
+            const html = trajectory.map((step, idx) => `
+                <div style="padding: 1rem; border-bottom: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                        <div>
+                            <strong>Step ${idx + 1}</strong>
+                            <div style="margin-top: 0.5rem;">
+                                <span class="badge badge-secondary">${step.action || 'unknown'}</span>
+                            </div>
+                        </div>
+                        <span class="text-small text-muted">${step.timestamp || ''}</span>
+                    </div>
+                    ${step.observation ? `
+                        <div style="margin-top: 0.5rem;">
+                            <div class="text-small text-muted">Observation:</div>
+                            <pre style="margin-top: 0.25rem; padding: 0.5rem; background: var(--bg-color); border-radius: 0.25rem; font-size: 0.75rem; overflow-x: auto;">${JSON.stringify(step.observation, null, 2)}</pre>
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+
+            container.innerHTML = html;
+        }
+
+        // Render full details
+        function renderDetails(assessment) {
+            const container = document.getElementById('details-container');
+
+            const html = `
+                <div style="font-family: monospace; font-size: 0.875rem; white-space: pre-wrap; overflow-x: auto; padding: 1rem; background: var(--bg-color); border-radius: 0.375rem;">
+${JSON.stringify(assessment, null, 2)}
+                </div>
+            `;
+
+            container.innerHTML = html;
+        }
+
+        // Auto-refresh for running assessments
+        let refreshInterval;
+        function startAutoRefresh() {
+            refreshInterval = setInterval(async () => {
+                const assessment = await api.getAssessment(assessmentId);
+                if (assessment.status !== 'running') {
+                    stopAutoRefresh();
+                    await loadAssessment();
+                }
+            }, 10000); // Check every 10 seconds
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        }
+
+        // Initialize
+        async function init() {
+            await loadAssessment();
+
+            const assessment = await api.getAssessment(assessmentId);
+            if (assessment.status === 'running') {
+                startAutoRefresh();
+            }
+        }
+
+        window.addEventListener('load', init);
+        window.addEventListener('beforeunload', () => {
+            stopAutoRefresh();
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+    </script>
+</body>
+</html>
