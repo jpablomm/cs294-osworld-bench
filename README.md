@@ -210,11 +210,20 @@ The system parses and executes:
                           ▼
 ┌──────────────────────────────────────────────────────────┐
 │                  OSWorld VM (GCE)                         │
-│              Golden Image: osworld-golden-v1              │
+│         Golden Image: osworld-golden-v2-gnome             │
 │                                                           │
+│  GDM3 → GNOME Shell (Display :0) → OSWorld (Flask :5000) │
+│         X.Org dummy driver (1920x1080 virtual display)    │
+│         Scrot for screenshots (patched main.py)           │
+│         Screen lock/blanking disabled (idle-delay=0)      │
+│                                                           │
+│  Apps: Chrome, Firefox, LibreOffice, GIMP, Nautilus      │
+└──────────────────────────────────────────────────────────┘
+
+Legacy Xvfb configuration (osworld-golden-v1):
+┌──────────────────────────────────────────────────────────┐
 │  Xvfb (:99) → Openbox → OSWorld Server (Flask :5000)    │
-│                                                           │
-│  Apps: Chrome 141, Firefox, LibreOffice, GIMP           │
+│  Chrome 141, Firefox, LibreOffice, GIMP                  │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -309,18 +318,44 @@ GET /assessments/{id}/artifacts
 
 ## 📦 What's Included
 
-### Golden GCE Image
+### Golden GCE Images
 
-Pre-configured VM image with everything installed:
+#### osworld-golden-v2-gnome (Latest - Recommended)
+
+**NEW:** Full GNOME Desktop environment for OS task support:
+- **OS:** Ubuntu 22.04 LTS
+- **Desktop:** GNOME Shell 42 with GDM3
+- **Display:** Display :0 with X.Org dummy video driver (1920x1080)
+- **Screenshot Method:** scrot (patched for GDM/GNOME compatibility)
+- **Screen Management:** Lock/blanking disabled via dconf + autostart
+- **Python Deps:** python3-tk and python3-dev (required for pyautogui/mouseinfo)
+- **OSWorld:** REST API server (port 5000)
+- **Chrome:** Latest stable
+- **Apps:** Firefox, LibreOffice, GIMP, gedit, Nautilus (file manager)
+- **Boot time:** 60 seconds
+- **Setup:** Fully automated via `setup_osworld_gnome_v3.sh`
+
+**Key advantages:**
+- ✅ Full desktop environment (wallpaper, launcher, file manager, etc.)
+- ✅ Works with both Chrome and OS tasks
+- ✅ Screenshots show actual desktop (>1MB vs 6KB black screens)
+- ✅ X.Org dummy video driver configured for headless operation
+- ✅ Screen locking/blanking disabled via dconf system-wide defaults + autostart script
+- ✅ Scrot patch handles screenshot capture reliably with GNOME/GDM
+- ✅ All Python dependencies included (python3-tk fixes mouseinfo import errors)
+
+#### osworld-golden-v1 (Legacy - Xvfb)
+
+Lightweight Xvfb-based configuration for Chrome tasks only:
 - **OS:** Ubuntu 22.04 LTS
 - **Display:** Xvfb (virtual display, 1920x1080)
 - **Desktop:** Openbox window manager
 - **OSWorld:** REST API server (port 5000)
 - **Chrome:** 141.0.7390.107
 - **Apps:** Firefox, LibreOffice, GIMP, gedit
+- **Boot time:** 60 seconds
 
-**Boot time:** 60 seconds
-**No setup required!**
+**Limitations:** May not work properly with OS tasks requiring desktop environment
 
 ### Code Components
 
@@ -337,7 +372,8 @@ Pre-configured VM image with everything installed:
 | Script | Purpose |
 |--------|---------|
 | `run_with_gpt4v.py` | Run OSWorld benchmarks with GPT-4o |
-| `setup_native_osworld.sh` | Full VM setup (20 min) |
+| `setup_osworld_gnome_v3.sh` | Full GNOME setup with all fixes (20 min) - **LATEST** |
+| `setup_native_osworld.sh` | Legacy Xvfb setup (20 min) |
 | `test_osworld_simple.sh` | Quick API test |
 | `prepare_for_imaging.sh` | Prepare VM for golden image |
 | `fix_*.sh` | Dependency installers |
@@ -487,6 +523,60 @@ DESKTOP_H=1080                    # Screen height
 ## 🛠️ Troubleshooting
 
 ### OSWorld VM Not Responding
+
+#### For GNOME-based VMs (osworld-golden-v2-gnome)
+
+```bash
+# SSH into VM
+gcloud compute ssh osworld-gnome-v2 --zone=us-central1-a
+
+# Check services
+sudo systemctl status gdm osworld-server
+
+# Check which display is active
+ls -la /tmp/.X11-unix/  # Should show X0
+
+# Verify GNOME is running
+ps aux | grep gnome-shell | grep -v grep
+
+# Restart services if needed
+sudo systemctl restart gdm
+sudo systemctl restart osworld-server
+
+# Check logs
+sudo journalctl -u osworld-server -n 50
+sudo tail -100 /home/user/osworld/logs/server-error.log
+
+# Test screenshot manually
+sudo -u user bash -c 'export DISPLAY=:0 && scrot /tmp/test.png' && ls -lh /tmp/test.png
+# Should be >1MB showing actual desktop, not 6KB black screen
+```
+
+**Common issues:**
+- **Black screenshots (6KB)**: Service may be using wrong DISPLAY. Check DISPLAY=:0 in service config.
+- **Small screenshots (27KB-110KB)**: Screen is locked or blanked after idle timeout. This should not happen with v3+ setup (uses dconf + autostart). If it does:
+  ```bash
+  # Check if dconf settings exist
+  cat /etc/dconf/db/local.d/00-disable-screen-lock
+
+  # Check autostart file
+  cat /home/user/.config/autostart/disable-screen-lock.desktop
+
+  # Manually disable if needed
+  sudo -u user bash -c 'export DISPLAY=:0 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus && gsettings set org.gnome.desktop.session idle-delay 0 && gsettings set org.gnome.desktop.screensaver lock-enabled false && gsettings set org.gnome.desktop.screensaver idle-activation-enabled false'
+
+  # Wake screen if locked
+  sudo -u user bash -c 'export DISPLAY=:0 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus && xdotool type password && xdotool key Return'
+  ```
+- **Service won't start with "env: '-m'" error**: Missing python3-tk package. Install with:
+  ```bash
+  sudo apt-get install -y python3-tk python3-dev
+  sudo systemctl restart osworld-server
+  ```
+- **Service won't start**: X display may not be ready. Check ExecStartPre waits for X0 socket in `/etc/systemd/system/osworld-server.service`.
+- **Desktop not rendering**: Ensure X.Org dummy driver is configured at `/etc/X11/xorg.conf.d/10-dummy.conf`.
+
+#### For Xvfb-based VMs (osworld-golden-v1)
 
 ```bash
 # SSH into VM

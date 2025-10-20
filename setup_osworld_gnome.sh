@@ -341,37 +341,92 @@ setup_osworld_server() {
     log "Setting up OSWorld server..."
 
     OSWORLD_DIR="/home/user/osworld"
-    OSWORLD_CODE="/home/pablo/green-agent/vendor/OSWorld"
 
     # Create OSWorld directory
     mkdir -p "$OSWORLD_DIR"
 
-    # Copy OSWorld code if available
-    if [ -d "$OSWORLD_CODE" ]; then
-        log "Copying OSWorld code..."
-        cp -r "$OSWORLD_CODE"/* "$OSWORLD_DIR/" 2>/dev/null || {
+    # Try multiple sources for OSWorld code (in order of preference)
+    OSWORLD_INSTALLED=false
+
+    # Option 1: Check if uploaded to /tmp/OSWorld
+    if [ -d "/tmp/OSWorld" ]; then
+        log "Found OSWorld in /tmp/OSWorld, copying..."
+        cp -r /tmp/OSWorld/* "$OSWORLD_DIR/" 2>/dev/null || {
             warn "Some files failed to copy, continuing..."
         }
-    else
-        warn "OSWorld code not found at $OSWORLD_CODE"
-        info "You'll need to clone OSWorld repository manually"
+        OSWORLD_INSTALLED=true
     fi
+
+    # Option 2: Clone from GitHub if not already installed
+    if [ "$OSWORLD_INSTALLED" = false ]; then
+        log "Cloning OSWorld from GitHub (this may take 2-3 minutes)..."
+        apt-get install -y -qq git > /dev/null 2>&1
+
+        if git clone https://github.com/xlang-ai/OSWorld.git /tmp/OSWorld-clone 2>/dev/null; then
+            log "Copying cloned OSWorld code..."
+            cp -r /tmp/OSWorld-clone/* "$OSWORLD_DIR/" 2>/dev/null
+            rm -rf /tmp/OSWorld-clone
+            OSWORLD_INSTALLED=true
+        else
+            error "Failed to clone OSWorld from GitHub. Please check network connectivity."
+        fi
+    fi
+
+    # Verify installation
+    if [ ! -f "$OSWORLD_DIR/desktop_env/server/main.py" ]; then
+        error "OSWorld installation failed - main.py not found"
+    fi
+
+    log "✓ OSWorld code installed"
 
     # Install Python dependencies
-    if [ -f "$OSWORLD_DIR/desktop_env/requirements.txt" ]; then
-        log "Installing OSWorld Python dependencies..."
-        python3 -m pip install -q -r "$OSWORLD_DIR/desktop_env/requirements.txt" || {
-            warn "Some dependencies failed to install, continuing..."
+    log "Installing OSWorld Python dependencies..."
+
+    # First, try server requirements.txt if it exists
+    if [ -f "$OSWORLD_DIR/desktop_env/server/requirements.txt" ]; then
+        log "Found server requirements.txt, installing..."
+        sudo -u user pip3 install -r "$OSWORLD_DIR/desktop_env/server/requirements.txt" 2>&1 | tee /tmp/pip_install.log || {
+            warn "Some dependencies from requirements.txt failed, will install manually"
         }
+    else
+        warn "requirements.txt not found at $OSWORLD_DIR/desktop_env/server/requirements.txt"
     fi
 
-    # Upgrade Pillow (required for pyautogui screenshots)
-    python3 -m pip install -q --upgrade "Pillow>=9.2.0"
-
-    # Install pyatspi2 for accessibility tree support
-    python3 -m pip install -q pyatspi2 || {
-        warn "pyatspi2 installation failed"
+    # Install system Python packages (via apt - these aren't available on PyPI)
+    log "Installing system Python packages..."
+    apt-get install -y -qq \
+        python3-pyatspi \
+        python3-gi \
+        python3-opencv \
+        > /dev/null || {
+        warn "Some system packages failed to install"
     }
+
+    # Install critical pip dependencies (in case requirements.txt is missing or incomplete)
+    log "Installing critical pip dependencies..."
+    sudo -u user pip3 install -q \
+        python-xlib \
+        "Pillow>=9.2.0" \
+        pyautogui \
+        opencv-python \
+        flask \
+        flask-cors \
+        requests \
+        lxml \
+        numpy \
+        psutil \
+        || {
+        warn "Some pip packages failed, checking if critical ones installed..."
+    }
+
+    # Verify critical imports work (skip pyautogui - it requires DISPLAY to be set)
+    log "Verifying Python imports..."
+    sudo -u user python3 -c "import Xlib; import pyatspi; import PIL; import flask" || {
+        error "Python import verification failed. Missing critical dependencies."
+    }
+
+    # Note: pyautogui import will be verified after reboot when DISPLAY is available
+    log "✓ Core Python dependencies verified (pyautogui will be verified after reboot)"
 
     # Set ownership
     chown -R user:user "$OSWORLD_DIR"
@@ -386,8 +441,12 @@ setup_osworld_server() {
 create_systemd_services() {
     log "Creating systemd services..."
 
+    # Get the actual UID of user 'user' (may not be 1000)
+    USER_UID=$(id -u user)
+    log "Detected user UID: $USER_UID"
+
     # OSWorld server service
-    cat > /etc/systemd/system/osworld-server.service <<'EOF'
+    cat > /etc/systemd/system/osworld-server.service <<EOF
 [Unit]
 Description=OSWorld Desktop Environment Server
 After=graphical.target
@@ -398,7 +457,7 @@ Type=simple
 User=user
 WorkingDirectory=/home/user/osworld
 Environment=DISPLAY=:0
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${USER_UID}/bus
 Environment=PYTHONPATH=/home/user/osworld:/home/user/osworld/desktop_env/server
 Environment=XAUTHORITY=/home/user/.Xauthority
 ExecStart=/usr/bin/python3 -m desktop_env.server.main --port 5000
