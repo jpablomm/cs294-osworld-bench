@@ -15,6 +15,7 @@
                 <a href="/">Dashboard</a>
                 <a href="/launch" class="active">Launch Assessment</a>
                 <a href="/results">Results</a>
+                <a href="/leaderboard">Leaderboard</a>
             </nav>
         </div>
     </header>
@@ -79,6 +80,24 @@
                     >
                     <div class="form-help">
                         Maximum number of agent steps (1-50)
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="num-runs">
+                        Number of Parallel Runs
+                    </label>
+                    <input
+                        type="number"
+                        id="num-runs"
+                        class="form-input"
+                        value="1"
+                        min="1"
+                        max="10"
+                        required
+                    >
+                    <div class="form-help">
+                        Run assessment multiple times in parallel for statistical significance (1-10)
                     </div>
                 </div>
 
@@ -418,6 +437,7 @@ REMEMBER:
 
             const taskId = document.getElementById('task-select').value;
             const maxSteps = parseInt(document.getElementById('max-steps').value);
+            const numRuns = parseInt(document.getElementById('num-runs').value);
             const vmImage = document.getElementById('vm-image').value;
             const whiteAgentUrl = document.getElementById('white-agent-url').value;
 
@@ -436,6 +456,7 @@ REMEMBER:
                     task_id: taskId,
                     domain: selectedTask.domain,
                     max_steps: maxSteps,
+                    num_runs: numRuns,
                     vm_image: vmImage
                 };
 

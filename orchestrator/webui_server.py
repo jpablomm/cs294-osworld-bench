@@ -64,6 +64,7 @@ class LaunchRequest(BaseModel):
     max_steps: int = 15
     vm_image: str = "osworld-golden-v3-gnome"
     white_agent_url: Optional[str] = None
+    num_runs: int = 1  # Number of parallel runs for rolling average
 
 
 # ============================================================================
@@ -110,6 +111,15 @@ def serve_results():
     if html_path.exists():
         return FileResponse(html_path)
     return JSONResponse({"error": "Results page not found"}, status_code=404)
+
+
+@app.get("/leaderboard")
+def serve_leaderboard():
+    """Serve leaderboard page"""
+    html_path = static_dir / "leaderboard.html"
+    if html_path.exists():
+        return FileResponse(html_path)
+    return JSONResponse({"error": "Leaderboard page not found"}, status_code=404)
 
 
 # ============================================================================
@@ -261,39 +271,68 @@ def get_assessment(assessment_id: str):
 
 @app.post("/api/assessments")
 async def launch_assessment(request: LaunchRequest):
-    """Launch new assessment"""
-    assessment_id = f"assess-{uuid.uuid4().hex[:8]}"
+    """Launch new assessment (or batch of parallel runs)"""
+    batch_id = f"batch-{uuid.uuid4().hex[:8]}"
+    assessment_ids = []
 
-    logger.info(f"Launching assessment {assessment_id} for task {request.task_id}")
+    logger.info(f"Launching batch {batch_id} with {request.num_runs} run(s) for task {request.task_id}")
 
-    # Save initial assessment record
-    db.save_assessment({
-        "id": assessment_id,
-        "task_id": request.task_id,
-        "domain": request.domain,
-        "status": "running",
-        "started_at": datetime.utcnow().isoformat(),
-        "config": {
-            "max_steps": request.max_steps,
-            "vm_image": request.vm_image,
-            "white_agent_url": request.white_agent_url or WHITE_AGENT_URL
+    # Create assessment IDs for each run
+    for run_num in range(1, request.num_runs + 1):
+        if request.num_runs == 1:
+            # Single run: use simple ID
+            assessment_id = f"assess-{uuid.uuid4().hex[:8]}"
+        else:
+            # Multiple runs: include run number in ID
+            assessment_id = f"assess-{uuid.uuid4().hex[:8]}-run-{run_num}"
+
+        assessment_ids.append(assessment_id)
+
+        # Save initial assessment record
+        db.save_assessment({
+            "id": assessment_id,
+            "task_id": request.task_id,
+            "domain": request.domain,
+            "status": "running",
+            "started_at": datetime.utcnow().isoformat(),
+            "run_number": run_num,
+            "batch_id": batch_id,
+            "config": {
+                "max_steps": request.max_steps,
+                "vm_image": request.vm_image,
+                "white_agent_url": request.white_agent_url or WHITE_AGENT_URL
+            }
+        })
+
+        # Create stream queue for this assessment
+        active_streams[assessment_id] = asyncio.Queue()
+
+    # Launch all runs in parallel
+    tasks = [
+        _run_assessment(assessment_id, request, run_num, batch_id)
+        for run_num, assessment_id in enumerate(assessment_ids, 1)
+    ]
+    asyncio.gather(*tasks)  # Fire and forget
+
+    # Return single ID for num_runs=1, batch_id for multiple runs
+    if request.num_runs == 1:
+        return {
+            "assessment_id": assessment_ids[0],
+            "batch_id": batch_id,
+            "status": "running",
+            "monitor_url": f"/monitor/{assessment_ids[0]}"
         }
-    })
-
-    # Create stream queue for this assessment
-    active_streams[assessment_id] = asyncio.Queue()
-
-    # Launch assessment in background
-    asyncio.create_task(_run_assessment(assessment_id, request))
-
-    return {
-        "assessment_id": assessment_id,
-        "status": "running",
-        "monitor_url": f"/monitor/{assessment_id}"
-    }
+    else:
+        return {
+            "batch_id": batch_id,
+            "assessment_ids": assessment_ids,
+            "status": "running",
+            "num_runs": request.num_runs,
+            "monitor_url": f"/api/batches/{batch_id}"
+        }
 
 
-async def _run_assessment(assessment_id: str, request: LaunchRequest):
+async def _run_assessment(assessment_id: str, request: LaunchRequest, run_number: int, batch_id: str):
     """Run assessment in background and update database"""
     try:
         # Build A2A task request
@@ -341,6 +380,8 @@ async def _run_assessment(assessment_id: str, request: LaunchRequest):
             "failure_reason": metrics.get("failure_reason"),
             "time_sec": metrics.get("time_sec"),
             "vm_cost": metrics.get("vm_cost"),
+            "run_number": run_number,
+            "batch_id": batch_id,
             "config": {
                 "max_steps": request.max_steps,
                 "vm_image": request.vm_image,
@@ -370,7 +411,9 @@ async def _run_assessment(assessment_id: str, request: LaunchRequest):
             "status": "failed",
             "started_at": datetime.utcnow().isoformat(),
             "completed_at": datetime.utcnow().isoformat(),
-            "failure_reason": str(e)
+            "failure_reason": str(e),
+            "run_number": run_number,
+            "batch_id": batch_id
         })
 
         # Send error to stream
@@ -446,6 +489,143 @@ def get_artifact(assessment_id: str, filepath: str):
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     return FileResponse(file_path)
+
+
+# ============================================================================
+# Batch and Statistics Endpoints
+# ============================================================================
+
+@app.get("/api/batches/{batch_id}")
+def get_batch(batch_id: str):
+    """Get all assessments in a batch with aggregate statistics"""
+    assessments = db.get_batch_assessments(batch_id)
+
+    if not assessments:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    # Calculate aggregate stats across batch
+    completed = [a for a in assessments if a["status"] == "completed"]
+
+    if completed:
+        avg_success = sum(a.get("success", 0) for a in completed) / len(completed) * 100
+        avg_steps = sum(a.get("steps", 0) for a in completed) / len(completed)
+        avg_time = sum(a.get("time_sec", 0) for a in completed) / len(completed)
+        avg_score = sum(a.get("evaluation_score", 0) or 0 for a in completed) / len(completed)
+    else:
+        avg_success = avg_steps = avg_time = avg_score = 0
+
+    return {
+        "batch_id": batch_id,
+        "total_runs": len(assessments),
+        "completed_runs": len(completed),
+        "assessments": assessments,
+        "aggregate_stats": {
+            "success_rate": round(avg_success, 1),
+            "avg_steps": round(avg_steps, 1),
+            "avg_time_sec": round(avg_time, 1),
+            "avg_evaluation_score": round(avg_score, 3) if avg_score else None
+        }
+    }
+
+
+@app.get("/api/tasks/{task_id}/stats")
+def get_task_stats(task_id: str):
+    """Get rolling average statistics for a task across all historical runs"""
+    stats = db.get_task_statistics(task_id)
+    return {
+        "task_id": task_id,
+        **stats
+    }
+
+
+# ============================================================================
+# Leaderboard Endpoints
+# ============================================================================
+
+@app.get("/api/metrics")
+def get_metrics():
+    """Get available metrics for leaderboards"""
+    return {
+        "metrics": db.get_available_metrics()
+    }
+
+
+@app.get("/api/leaderboard")
+def get_leaderboard(
+    task_id: Optional[str] = None,
+    metric: str = "success_rate",
+    limit: int = 50,
+    domain: Optional[str] = None
+):
+    """
+    Unified leaderboard endpoint
+
+    Args:
+        task_id: Optional task ID to filter by (per-task leaderboard)
+        metric: Metric to rank by (success_rate, avg_steps, avg_time_sec, avg_evaluation_score)
+        limit: Maximum number of entries
+        domain: Optional domain filter (for global leaderboard)
+
+    Returns:
+        Leaderboard ranked by specified metric
+    """
+    try:
+        if task_id:
+            # Per-task leaderboard
+            leaderboard = db.get_task_leaderboard(task_id, metric, limit)
+            return {
+                "type": "task",
+                "task_id": task_id,
+                "metric": metric,
+                "leaderboard": leaderboard
+            }
+        else:
+            # Global leaderboard
+            leaderboard = db.get_global_leaderboard(metric, limit, domain)
+            return {
+                "type": "global",
+                "domain": domain,
+                "metric": metric,
+                "leaderboard": leaderboard
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/leaderboard/tasks/{task_id}")
+def get_task_leaderboard_shortcut(
+    task_id: str,
+    metric: str = "success_rate",
+    limit: int = 50
+):
+    """Shortcut endpoint for per-task leaderboard"""
+    try:
+        leaderboard = db.get_task_leaderboard(task_id, metric, limit)
+        return {
+            "task_id": task_id,
+            "metric": metric,
+            "leaderboard": leaderboard
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/leaderboard/global")
+def get_global_leaderboard_shortcut(
+    metric: str = "success_rate",
+    limit: int = 50,
+    domain: Optional[str] = None
+):
+    """Shortcut endpoint for global leaderboard"""
+    try:
+        leaderboard = db.get_global_leaderboard(metric, limit, domain)
+        return {
+            "metric": metric,
+            "domain": domain,
+            "leaderboard": leaderboard
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 if __name__ == "__main__":
