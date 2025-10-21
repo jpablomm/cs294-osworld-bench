@@ -60,9 +60,10 @@ class VMManager:
 
     def get_vm_name(self, task_id: str) -> str:
         """Generate VM name from task ID"""
-        # Use first 8 chars of task_id to keep name short
-        safe_id = task_id[:8].replace("_", "-").lower()
-        return f"osworld-task-{safe_id}"
+        # Use full task_id to ensure uniqueness for concurrent executions
+        # Sanitize for GCP naming: lowercase, hyphens instead of underscores
+        safe_id = task_id.replace("_", "-").lower()
+        return f"osworld-{safe_id}"
 
     def create_vm(self, task_id: str) -> Dict[str, Any]:
         """
@@ -124,6 +125,9 @@ class VMManager:
                 "task-id": task_id[:63].replace("_", "-").lower(),  # GCP label length limit
                 "managed-by": "orchestrator",
             }
+
+            # Network tags for firewall rules
+            instance.tags = compute_v1.Tags(items=["osworld-vm"])
 
             # Create the VM
             operation = self.instances_client.insert(

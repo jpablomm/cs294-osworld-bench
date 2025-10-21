@@ -380,6 +380,23 @@
             return String(action);
         }
 
+        // Handle screenshot loading errors with fallback
+        function handleScreenshotError(img) {
+            // If we haven't tried the fallback yet
+            if (img.dataset.fallback && !img.dataset.triedFallback) {
+                console.log('GCS screenshot failed, trying local fallback:', img.dataset.fallback);
+                img.dataset.triedFallback = 'true';
+                img.src = img.dataset.fallback;
+            } else {
+                // Both GCS and local failed, hide image and show message
+                console.log('Both screenshot sources failed');
+                img.style.display = 'none';
+                if (img.nextElementSibling) {
+                    img.nextElementSibling.style.display = 'block';
+                }
+            }
+        }
+
         // Render trajectory
         function renderTrajectory(trajectory) {
             const container = document.getElementById('trajectory-container');
@@ -390,9 +407,12 @@
             }
 
             const html = trajectory.map((step, idx) => {
-                // Generate screenshot path (green agent saves as step_N.png directly in artifacts dir)
+                // Generate screenshot paths
                 const stepNum = step.step || (idx + 1);
-                const screenshotPath = `/api/artifacts/${assessmentId}/step_${stepNum}.png`;
+
+                // Try GCS first (permanent storage), fall back to local API
+                const gcsPath = `https://storage.googleapis.com/osworld-green-agent-artifacts/${assessmentId}/step_${stepNum}.png`;
+                const localPath = `/api/artifacts/${assessmentId}/step_${stepNum}.png`;
 
                 return `
                 <div style="padding: 1rem; border-bottom: 1px solid var(--border-color);">
@@ -423,11 +443,12 @@
                     <!-- Screenshot -->
                     <div style="margin-top: 0.75rem;">
                         <img
-                            src="${screenshotPath}"
+                            src="${gcsPath}"
+                            data-fallback="${localPath}"
                             alt="Step ${idx + 1} screenshot"
                             style="width: 100%; max-width: 800px; border: 1px solid var(--border-color); border-radius: 0.375rem; cursor: pointer;"
-                            onclick="window.open('${screenshotPath}', '_blank')"
-                            onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"
+                            onclick="window.open(this.src, '_blank')"
+                            onerror="handleScreenshotError(this)"
                         >
                         <div style="display: none; padding: 1rem; background: var(--bg-color); border-radius: 0.375rem; text-align: center; color: var(--text-secondary); font-size: 0.875rem;">
                             Screenshot not available

@@ -308,7 +308,7 @@ async def _execute_assessment(
         vm_ready = await asyncio.to_thread(
             vm_manager.wait_for_vm_ready,
             vm_info["vm_ip"],
-            timeout=300  # Increased from 120 to 300 seconds (5 minutes)
+            timeout=600  # Increased to 600 seconds (10 minutes) for slower VM startups
         )
 
         if not vm_ready:
