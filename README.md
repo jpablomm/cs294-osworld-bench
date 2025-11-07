@@ -6,14 +6,17 @@ A **production-ready autonomous agent evaluation system** using **native OSWorld
 
 ## 🎯 Project Status
 
-**✅ PRODUCTION READY** — Native mode fully operational and tested
+**✅ PRODUCTION READY** — Native mode fully operational and tested with Web UI
 
 - ✅ **Native OSWorld Mode**: REST API integration, 100ms latency
 - ✅ **Golden GCE Images**: 60-second boot (vs 20-minute setup)
 - ✅ **Complete Integration**: White Agent + Green Agent + OSWorld working end-to-end
 - ✅ **GPT-4o Benchmarking**: Full OSWorld benchmark support with vision-language models
+- ✅ **Web UI Dashboard**: Launch, monitor, results browser, leaderboard
+- ✅ **Parallel Runs**: 1-10 concurrent runs for statistical significance
+- ✅ **Database-Backed**: SQLite with auto-migration, batch tracking, leaderboard rankings
 - ✅ **Tested & Verified**: Chrome launch, screenshots, full task execution
-- ✅ **Comprehensive Documentation**: 4000+ lines across 10+ guides
+- ✅ **Comprehensive Documentation**: 5000+ lines across 15+ guides
 
 **Performance vs Docker/QEMU**:
 ```
@@ -72,7 +75,43 @@ curl http://localhost:8000/health
 # Use native mode instead
 ```
 
-### Mode 4: VM Orchestrator (Production Scale) 🎯 NEW
+### Mode 4: Local Orchestrator with Web UI 🎯 NEW - RECOMMENDED
+
+**Full-featured web interface** for launching assessments, monitoring progress, and viewing results:
+
+```bash
+# 1. Install dependencies (if not already installed)
+pip install -r requirements.txt
+
+# 2. Start orchestrator with Web UI
+cd orchestrator
+uvicorn webui_server:app --host 0.0.0.0 --port 3001
+
+# 3. Open browser
+open http://localhost:3001
+
+# Features available:
+# - Dashboard: System health, stats, recent assessments
+# - Launch: Start single or parallel assessments
+# - Results: Browse all assessments with filters
+# - Leaderboard: Compare agent configurations
+# - Batch Monitoring: Real-time parallel run tracking
+```
+
+**Features:**
+- ✅ **Web UI** - Beautiful dashboard, no CLI required
+- ✅ **Parallel Runs** - Run same task 1-10 times for statistical significance
+- ✅ **Batch Monitoring** - Real-time progress tracking with aggregate stats
+- ✅ **Leaderboard** - Global and per-task agent configuration rankings
+- ✅ **Database-backed** - SQLite with automatic schema migration
+- ✅ **Auto-refresh** - Live updates without manual polling
+- ✅ **Rich Metrics** - Success rate, avg steps, time, cost tracking
+- ✅ **Screenshot Gallery** - View all assessment screenshots
+- ✅ **Task Browser** - Filter by status, domain, task ID
+
+See [Local Orchestrator with Web UI section](#-local-orchestrator-with-web-ui) below for complete details.
+
+### Mode 5: VM Orchestrator (Cloud Run - Production Scale)
 
 **Serverless Cloud Run orchestrator** — Auto-creates VMs per task, executes assessments, cleans up:
 
@@ -104,7 +143,7 @@ curl https://osworld-orchestrator-xxxxx-uc.a.run.app/tasks/abc-123/results
 - ✅ **Progress tracking** - 5-stage workflow with percentage updates
 - ✅ **Cost efficient** - ~$0.017/task (VM + Cloud Run)
 
-See [VM Orchestrator section](#-vm-orchestrator-cloud-run) below for complete details.
+See [VM Orchestrator (Cloud Run) section](#-vm-orchestrator-cloud-run) below for complete details.
 
 ---
 
@@ -400,6 +439,463 @@ GCE VM → Ubuntu → OSWorld
         ✅ Direct
         ✅ Fast
         ✅ Reliable
+```
+
+---
+
+## 🌐 Local Orchestrator with Web UI
+
+**Production-ready web interface** for managing OSWorld assessments with full UI, database tracking, and leaderboard system.
+
+### Overview
+
+The Local Orchestrator provides a **complete web application** for running and monitoring OSWorld assessments:
+
+**Key Features:**
+- ✅ **Modern Web UI** - Dashboard, launch page, results browser, leaderboard
+- ✅ **Parallel Runs** - Run same task multiple times for statistical significance (1-10 runs)
+- ✅ **Batch Monitoring** - Real-time tracking of parallel executions with aggregate statistics
+- ✅ **Leaderboard System** - Global and per-task rankings by multiple metrics
+- ✅ **SQLite Database** - Persistent storage with automatic schema migration
+- ✅ **Rich Metrics** - Success rate, average steps, time, cost, evaluation scores
+- ✅ **Screenshot Gallery** - View all captured screenshots for each assessment
+- ✅ **Auto-refresh** - Live updates without manual page refreshes
+- ✅ **Filtering** - Search by status, domain, task ID with pagination
+
+### Quick Start
+
+```bash
+# 1. Navigate to orchestrator directory
+cd orchestrator
+
+# 2. Set environment variables
+export GREEN_AGENT_URL=http://localhost:8000
+export WHITE_AGENT_URL=http://localhost:9001
+
+# 3. Start the Web UI server
+uvicorn webui_server:app --host 0.0.0.0 --port 3001
+
+# 4. Open browser
+open http://localhost:3001
+```
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────┐
+│                  Browser (You)                        │
+│         http://localhost:3001                         │
+└─────────────────────┬────────────────────────────────┘
+                      │ HTTP
+                      ▼
+┌──────────────────────────────────────────────────────┐
+│        WebUI Server (orchestrator/webui_server.py)   │
+│                    Port 3001                          │
+│  ┌────────────────────────────────────────────────┐  │
+│  │ HTML Pages:                                    │  │
+│  │  - dashboard.html  (stats, health, recent)    │  │
+│  │  - launch.html     (start assessments)        │  │
+│  │  - results.html    (browse all results)       │  │
+│  │  - leaderboard.html (rankings)                │  │
+│  │  - monitor.html    (single assessment)        │  │
+│  │  - batch.html      (parallel run tracking)    │  │
+│  └────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────┐  │
+│  │ REST API:                                      │  │
+│  │  - GET /api/health                            │  │
+│  │  - GET /api/stats                             │  │
+│  │  - POST /api/assessments/launch               │  │
+│  │  - GET /api/assessments                       │  │
+│  │  - GET /api/leaderboard                       │  │
+│  │  - GET /api/batches/{id}                      │  │
+│  └────────────────┬───────────────────────────────┘  │
+└────────────────────┼──────────────────────────────────┘
+                     │
+        ┌────────────┼────────────┐
+        │            │            │
+        ▼            ▼            ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ Green Agent  │ │ White Agent  │ │ SQLite DB    │
+│ (Port 8000)  │ │ (Port 9001)  │ │ (assessments)│
+└──────────────┘ └──────────────┘ └──────────────┘
+```
+
+### Web Pages
+
+#### 1. Dashboard (`/`)
+
+Real-time system overview:
+- **Stats Cards**: Total assessments, running now, success rate, avg time, total cost
+- **System Health**: Green agent, white agent, database status indicators
+- **Recent Assessments**: Last 20 assessments with live updates every 5 seconds
+
+#### 2. Launch Assessment (`/launch`)
+
+Interactive form to start assessments:
+- **Task Selection**: Browse 369 OSWorld tasks by domain (OS, Chrome, GIMP, etc.)
+- **Configuration**: Max steps, VM image, agent URLs
+- **Parallel Runs**: 1-10 parallel runs for statistical significance
+- **Batch Launch**: Automatically creates batch and redirects to batch monitoring
+
+**Example Usage:**
+```
+1. Select domain: "os"
+2. Select task: "Create new folder on desktop"
+3. Set max steps: 15
+4. Set parallel runs: 5
+5. Click "Launch Assessment"
+   → Redirects to /batch/{batch_id} for real-time monitoring
+```
+
+#### 3. Results Browser (`/results`)
+
+Browse all assessments with powerful filtering:
+- **Filters**: Status (completed/failed/running), domain, task ID
+- **Table View**: ID, task, domain, status, result, score, steps, time, cost
+- **Pagination**: 20 results per page
+- **Click-through**: Click any assessment ID to view details
+- **Auto-refresh**: Updates every 10 seconds
+
+#### 4. Leaderboard (`/leaderboard`)
+
+Compare agent configurations:
+
+**Global Leaderboard**:
+- Rank agents by: Success rate, avg steps, avg time, evaluation score
+- Filter by domain (OS, Web, All)
+- Shows: Configuration, tasks attempted, total runs, all metrics
+
+**Per-Task Leaderboard**:
+- Rankings for specific task ID
+- Compare different agents/configs on same task
+- Ideal for A/B testing agent improvements
+
+**Metrics Displayed**:
+- Success Rate (%)
+- Average Steps
+- Average Time (seconds)
+- Average Evaluation Score
+- Total Runs
+
+#### 5. Assessment Monitor (`/monitor/{assessment_id}`)
+
+Detailed view of single assessment:
+- **Metadata**: Task ID, status, timestamps, configuration
+- **Results**: Success/failure, steps taken, execution time, cost
+- **Trajectory**: Full step-by-step action history
+- **Screenshots**: Gallery of all captured screenshots
+- **Evaluation**: Detailed evaluation results if available
+- **Raw Data**: View complete trajectory JSON
+
+#### 6. Batch Monitor (`/batch/{batch_id}`)
+
+Real-time parallel run tracking:
+
+**Aggregate Statistics**:
+- Success Rate: X/Y completed successfully
+- Average Steps: Mean across all runs
+- Average Time: Mean execution time
+- Progress Bar: Visual completion indicator
+
+**Individual Runs Table**:
+- Assessment ID (clickable to view details)
+- Status (pending/running/completed/failed)
+- Result (pass/fail)
+- Steps taken
+- Time elapsed
+- Link to view full results
+
+**Auto-refresh**: Updates every 5 seconds until all runs complete
+
+### API Reference
+
+#### Health Check
+```bash
+GET /api/health
+
+Response:
+{
+  "status": "healthy",
+  "green_agent": {
+    "url": "http://localhost:8000",
+    "healthy": true
+  },
+  "white_agent": {
+    "url": "http://localhost:9001",
+    "healthy": true
+  },
+  "database": {
+    "path": "webui_assessments.db",
+    "healthy": true
+  }
+}
+```
+
+#### Get Statistics
+```bash
+GET /api/stats
+
+Response:
+{
+  "total_assessments": 150,
+  "running_assessments": 3,
+  "success_rate_24h": 87.5,
+  "avg_time_sec": 124.3,
+  "total_cost": 2.45
+}
+```
+
+#### Launch Assessment
+```bash
+POST /api/assessments/launch
+Content-Type: application/json
+
+{
+  "task_id": "5ea617a3-0e86-4ba6-aab2-dac9aa2e8d57",
+  "domain": "os",
+  "max_steps": 15,
+  "num_runs": 5,                    # Parallel runs (1-10)
+  "vm_image": "osworld-golden-v2"
+}
+
+Response:
+{
+  "batch_id": "batch-abc123",
+  "num_runs": 5,
+  "assessment_ids": [
+    "assess-abc123-run-1",
+    "assess-abc123-run-2",
+    "assess-abc123-run-3",
+    "assess-abc123-run-4",
+    "assess-abc123-run-5"
+  ],
+  "monitor_url": "/batch/batch-abc123"
+}
+```
+
+#### List Assessments
+```bash
+GET /api/assessments?limit=20&offset=0&status=completed&domain=os
+
+Response:
+{
+  "assessments": [
+    {
+      "id": "assess-123",
+      "task_id": "5ea617a3-...",
+      "domain": "os",
+      "status": "completed",
+      "success": 1,
+      "evaluation_score": 1.0,
+      "steps": 8,
+      "time_sec": 95.3,
+      "vm_cost": 0.0158,
+      "started_at": "2025-01-20T10:30:00Z",
+      "completed_at": "2025-01-20T10:31:35Z",
+      "config": {
+        "model": "gpt-4o",
+        "temp": 0.7,
+        "max_tokens": 4096
+      },
+      "batch_id": "batch-abc",
+      "run_number": 1
+    },
+    ...
+  ],
+  "total": 150
+}
+```
+
+#### Get Batch Status
+```bash
+GET /api/batches/{batch_id}
+
+Response:
+{
+  "batch_id": "batch-abc123",
+  "total_runs": 5,
+  "completed_runs": 5,
+  "successful_runs": 4,
+  "success_rate": 80.0,
+  "avg_steps": 9.2,
+  "avg_time_sec": 102.5,
+  "runs": [
+    {
+      "id": "assess-abc123-run-1",
+      "status": "completed",
+      "success": 1,
+      "steps": 8,
+      "time_sec": 95.3
+    },
+    ...
+  ]
+}
+```
+
+#### Get Global Leaderboard
+```bash
+GET /api/leaderboard?metric=success_rate&domain=os
+
+Response:
+{
+  "leaderboard": [
+    {
+      "rank": 1,
+      "config": {
+        "model": "gpt-4o",
+        "temp": 0.7
+      },
+      "tasks_attempted": 25,
+      "total_runs": 125,
+      "success_rate": 88.0,
+      "avg_steps": 8.5,
+      "avg_time_sec": 98.2,
+      "avg_evaluation_score": 0.92
+    },
+    ...
+  ]
+}
+```
+
+#### Get Per-Task Leaderboard
+```bash
+GET /api/leaderboard/tasks/{task_id}?metric=avg_steps
+
+Response:
+{
+  "task_id": "5ea617a3-...",
+  "leaderboard": [
+    {
+      "rank": 1,
+      "config": {
+        "model": "claude-3.5-sonnet",
+        "temp": 0.5
+      },
+      "total_runs": 10,
+      "success_rate": 90.0,
+      "avg_steps": 7.2,
+      "avg_time_sec": 85.1,
+      "avg_evaluation_score": 0.95
+    },
+    ...
+  ]
+}
+```
+
+### Database Schema
+
+**assessments table**:
+```sql
+CREATE TABLE assessments (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    domain TEXT,
+    status TEXT NOT NULL,  -- pending, running, completed, failed
+    success INTEGER,        -- 0 or 1
+    evaluation_score REAL,
+    steps INTEGER,
+    time_sec REAL,
+    vm_cost REAL,
+    failure_reason TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    trajectory TEXT,        -- JSON
+    artifacts TEXT,         -- JSON array of screenshot URLs
+    config TEXT,            -- JSON of agent config
+    batch_id TEXT,          -- For parallel runs
+    run_number INTEGER,     -- Run number within batch
+    -- Indexes on batch_id, run_number, status, domain, task_id
+);
+```
+
+**Automatic Migration**: Database automatically migrates from old schema (no batch_id/run_number) to new schema on startup.
+
+### Configuration
+
+**Environment Variables**:
+```bash
+GREEN_AGENT_URL=http://localhost:8000     # Green agent endpoint
+WHITE_AGENT_URL=http://localhost:9001     # White agent endpoint
+WEBUI_PORT=3001                           # WebUI server port
+DATABASE_PATH=webui_assessments.db        # SQLite database file
+```
+
+**Update webui_server.py configuration**:
+```python
+# orchestrator/webui_server.py
+GREEN_AGENT_URL = os.getenv("GREEN_AGENT_URL", "http://localhost:8000")
+WHITE_AGENT_URL = os.getenv("WHITE_AGENT_URL", "http://localhost:9001")
+```
+
+### Production Deployment
+
+**For local/development**:
+```bash
+uvicorn orchestrator.webui_server:app --host 0.0.0.0 --port 3001
+```
+
+**With production ASGI server**:
+```bash
+gunicorn orchestrator.webui_server:app \
+  --workers 4 \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:3001
+```
+
+**With Docker**:
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY orchestrator/ orchestrator/
+COPY webui/ webui/
+CMD ["uvicorn", "orchestrator.webui_server:app", "--host", "0.0.0.0", "--port", "3001"]
+```
+
+### Components
+
+| File | Purpose | Lines |
+|------|---------|-------|
+| `orchestrator/webui_server.py` | FastAPI server with HTML + REST API | 450+ |
+| `orchestrator/database.py` | SQLite database layer with migration | 250 |
+| `webui/static/dashboard.html` | System overview page | 277 |
+| `webui/static/launch.html` | Assessment launch form | 470+ |
+| `webui/static/results.html` | Results browser with filters | 298 |
+| `webui/static/leaderboard.html` | Rankings page | 250 |
+| `webui/static/monitor.html` | Single assessment detail view | 500+ |
+| `webui/static/batch.html` | Parallel run batch monitoring | 300 |
+| `webui/static/css/style.css` | Shared styles | 500+ |
+| `webui/static/js/api.js` | API client library | 150 |
+
+### Troubleshooting
+
+**Database schema errors**:
+```bash
+# Delete and recreate database
+rm webui_assessments.db
+# Will auto-create on next startup
+
+# Or manually migrate
+python -c "from orchestrator.database import Database; db = Database(); print('Migration complete')"
+```
+
+**Green/White agent connection errors**:
+```bash
+# Check agents are running
+curl http://localhost:8000/health
+curl http://localhost:9001/health
+
+# Update environment variables if using different ports
+export GREEN_AGENT_URL=http://localhost:8000
+export WHITE_AGENT_URL=http://localhost:9001
+```
+
+**Browser cache issues**:
+```bash
+# Hard refresh to clear cached HTML/CSS/JS
+# Mac: Cmd + Shift + R
+# Windows/Linux: Ctrl + Shift + R
 ```
 
 ---
@@ -930,6 +1426,7 @@ Lightweight Xvfb-based configuration for Chrome tasks only:
 
 ### Code Components
 
+**Core Agent System**:
 | File | Purpose | Lines |
 |------|---------|-------|
 | `green_agent/osworld_client.py` | REST API client with pyautogui support | 290 |
@@ -937,6 +1434,24 @@ Lightweight Xvfb-based configuration for Chrome tasks only:
 | `run_with_gpt4v.py` | GPT-4o benchmark runner | 330 |
 | `white_agent/server.py` | Example White Agent | 139 |
 | `green_agent/app.py` | Green Agent REST API | 200+ |
+
+**Web UI & Local Orchestrator**:
+| File | Purpose | Lines |
+|------|---------|-------|
+| `orchestrator/webui_server.py` | FastAPI server with HTML + REST API | 450+ |
+| `orchestrator/database.py` | SQLite database layer with migration | 250 |
+| `webui/static/dashboard.html` | System overview page | 277 |
+| `webui/static/launch.html` | Assessment launch form | 470+ |
+| `webui/static/results.html` | Results browser with filters | 298 |
+| `webui/static/leaderboard.html` | Rankings page | 250 |
+| `webui/static/monitor.html` | Single assessment detail view | 500+ |
+| `webui/static/batch.html` | Parallel run batch monitoring | 300 |
+| `webui/static/css/style.css` | Shared styles | 500+ |
+| `webui/static/js/api.js` | API client library | 150 |
+
+**Cloud Run Orchestrator**:
+| File | Purpose | Lines |
+|------|---------|-------|
 | `orchestrator/app.py` | Cloud Run orchestrator service | 363 |
 | `orchestrator/vm_manager.py` | GCE VM lifecycle management | 349 |
 | `orchestrator/storage.py` | GCS/local results storage | 221 |
@@ -1215,8 +1730,11 @@ See [DEBUG_OSWORLD.md](./DEBUG_OSWORLD.md) for complete troubleshooting guide.
 1. ✅ ~~Test complete system~~ - White Agent + Green Agent + OSWorld **DONE**
 2. ✅ ~~Run real benchmarks~~ - OSWorld evaluation tasks **DONE**
 3. ✅ ~~Build VM orchestration~~ - Cloud Run orchestrator **DONE**
-4. **Add evaluation logic** - Automate task success determination with OSWorld evaluators
-5. **Run full benchmark suite** - Test GPT-4o on all 369 OSWorld tasks
+4. ✅ ~~WebUI~~ - Dashboard, launch, results browser, leaderboard **DONE**
+5. ✅ ~~Parallel runs~~ - Statistical significance testing **DONE**
+6. ✅ ~~Leaderboard system~~ - Agent configuration rankings **DONE**
+7. **Add evaluation logic** - Automate task success determination with OSWorld evaluators
+8. **Run full benchmark suite** - Test GPT-4o on all 369 OSWorld tasks
 
 ### Short-term
 
@@ -1225,14 +1743,15 @@ See [DEBUG_OSWORLD.md](./DEBUG_OSWORLD.md) for complete troubleshooting guide.
 3. **Scale testing** - Run 10+ parallel GPT-4o benchmarks via orchestrator
 4. **Compare models** - Test GPT-4o vs Claude 3.5 Sonnet vs other VLMs
 5. **Add task queuing** - Pub/Sub or Cloud Tasks for better scaling
+6. **Export leaderboard data** - CSV/JSON export for analysis
 
 ### Medium-term
 
 1. ✅ ~~Vision integration~~ - Claude/GPT-4V for screenshot analysis **DONE**
-2. **Multi-agent testing** - Compare different agents on same tasks
-3. **Leaderboard system** - Track agent performance across benchmarks
-4. **WebUI** - Real-time task monitoring and result visualization
-5. **Automated evaluation** - Use OSWorld's built-in evaluators for success metrics
+2. **Multi-agent testing** - Compare different agents on same tasks via UI
+3. **Advanced analytics** - Task difficulty scoring, agent strengths/weaknesses
+4. **Automated evaluation** - Use OSWorld's built-in evaluators for success metrics
+5. **Multi-domain benchmarks** - Comprehensive testing across OS, Chrome, GIMP, etc.
 
 ---
 
@@ -1308,11 +1827,16 @@ What we built:
 - ✅ **Complete Integration** - White + Green + OSWorld
 - ✅ **GPT-4o Benchmarking** - Full OSWorld evaluation with vision-language models
 - ✅ **REST API Client** - Full functionality with pyautogui support (290 lines)
+- ✅ **Web UI Dashboard** - Complete assessment management interface (3500+ lines)
+- ✅ **Parallel Runs** - 1-10 concurrent executions for statistical significance
+- ✅ **Leaderboard System** - Global and per-task agent configuration rankings
+- ✅ **Database Layer** - SQLite with auto-migration and batch tracking (250 lines)
+- ✅ **Batch Monitoring** - Real-time parallel run tracking with aggregate stats
 - ✅ **VM Orchestrator** - Cloud Run serverless orchestration (1100+ lines)
 - ✅ **Production Ready** - Tested, documented, working
 - ✅ **5000+ lines docs** - Comprehensive guides
 
-**From broken Docker/QEMU to production-ready serverless benchmarking platform!** 🚀
+**From broken Docker/QEMU to production-ready benchmarking platform with full Web UI!** 🚀
 
 ---
 

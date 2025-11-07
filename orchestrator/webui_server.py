@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(
     title="OSWorld WebUI",
-    description="Web interface for OSWorld assessment system",
-    version="1.0.0"
+    description="Web interface for OSWorld Green Agent",
+    version="1.0.0",
 )
 
 # Enable CORS
@@ -47,7 +47,13 @@ db = AssessmentDB("webui_assessments.db")
 # Configuration
 GREEN_AGENT_URL = "http://localhost:8001"
 WHITE_AGENT_URL = "http://localhost:9002"
-OSWORLD_EXAMPLES_DIR = Path(__file__).parent.parent / "vendor" / "OSWorld" / "evaluation_examples" / "examples"
+OSWORLD_EXAMPLES_DIR = (
+    Path(__file__).parent.parent
+    / "vendor"
+    / "OSWorld"
+    / "evaluation_examples"
+    / "examples"
+)
 
 # Track active assessment streams
 active_streams: Dict[str, asyncio.Queue] = {}
@@ -57,8 +63,10 @@ active_streams: Dict[str, asyncio.Queue] = {}
 # Models
 # ============================================================================
 
+
 class LaunchRequest(BaseModel):
     """Request to launch new assessment"""
+
     task_id: str
     domain: Optional[str] = None
     max_steps: int = 15
@@ -83,7 +91,9 @@ def serve_index():
     html_path = static_dir / "dashboard.html"
     if html_path.exists():
         return FileResponse(html_path)
-    return JSONResponse({"error": "Dashboard not found. Static files not set up."}, status_code=404)
+    return JSONResponse(
+        {"error": "Dashboard not found. Static files not set up."}, status_code=404
+    )
 
 
 @app.get("/launch")
@@ -122,9 +132,19 @@ def serve_leaderboard():
     return JSONResponse({"error": "Leaderboard page not found"}, status_code=404)
 
 
+@app.get("/batch/{batch_id}")
+def serve_batch_monitor(batch_id: str):
+    """Serve batch monitor page"""
+    html_path = static_dir / "batch.html"
+    if html_path.exists():
+        return FileResponse(html_path)
+    return JSONResponse({"error": "Batch monitor page not found"}, status_code=404)
+
+
 # ============================================================================
 # API Endpoints
 # ============================================================================
+
 
 @app.get("/api/health")
 async def get_health():
@@ -152,18 +172,9 @@ async def get_health():
         logger.error(f"Health check error: {e}")
 
     return {
-        "green_agent": {
-            "url": GREEN_AGENT_URL,
-            "healthy": green_healthy
-        },
-        "white_agent": {
-            "url": WHITE_AGENT_URL,
-            "healthy": white_healthy
-        },
-        "database": {
-            "healthy": True,
-            "path": str(db.db_path)
-        }
+        "green_agent": {"url": GREEN_AGENT_URL, "healthy": green_healthy},
+        "white_agent": {"url": WHITE_AGENT_URL, "healthy": white_healthy},
+        "database": {"healthy": True, "path": str(db.db_path)},
     }
 
 
@@ -197,11 +208,13 @@ def list_tasks(domain: Optional[str] = None):
                 with open(task_file) as f:
                     task_data = json.load(f)
 
-                tasks.append({
-                    "id": task_file.stem,
-                    "domain": domain_dir.name,
-                    "instruction": task_data.get("instruction", "No description")
-                })
+                tasks.append(
+                    {
+                        "id": task_file.stem,
+                        "domain": domain_dir.name,
+                        "instruction": task_data.get("instruction", "No description"),
+                    }
+                )
             except Exception as e:
                 logger.warning(f"Failed to load task {task_file}: {e}")
 
@@ -213,7 +226,9 @@ def get_task_details(task_id: str, domain: Optional[str] = None):
     """Get full task details including evaluation configuration"""
 
     if not OSWORLD_EXAMPLES_DIR.exists():
-        raise HTTPException(status_code=404, detail="OSWorld examples directory not found")
+        raise HTTPException(
+            status_code=404, detail="OSWorld examples directory not found"
+        )
 
     # If domain provided, search in that domain only
     if domain:
@@ -241,21 +256,13 @@ def list_assessments(
     offset: int = 0,
     status: Optional[str] = None,
     domain: Optional[str] = None,
-    task_id: Optional[str] = None
+    task_id: Optional[str] = None,
 ):
     """List assessments with optional filtering"""
     assessments = db.list_assessments(
-        limit=limit,
-        offset=offset,
-        status=status,
-        domain=domain,
-        task_id=task_id
+        limit=limit, offset=offset, status=status, domain=domain, task_id=task_id
     )
-    return {
-        "assessments": assessments,
-        "limit": limit,
-        "offset": offset
-    }
+    return {"assessments": assessments, "limit": limit, "offset": offset}
 
 
 @app.get("/api/assessments/{assessment_id}")
@@ -275,7 +282,9 @@ async def launch_assessment(request: LaunchRequest):
     batch_id = f"batch-{uuid.uuid4().hex[:8]}"
     assessment_ids = []
 
-    logger.info(f"Launching batch {batch_id} with {request.num_runs} run(s) for task {request.task_id}")
+    logger.info(
+        f"Launching batch {batch_id} with {request.num_runs} run(s) for task {request.task_id}"
+    )
 
     # Create assessment IDs for each run
     for run_num in range(1, request.num_runs + 1):
@@ -289,20 +298,22 @@ async def launch_assessment(request: LaunchRequest):
         assessment_ids.append(assessment_id)
 
         # Save initial assessment record
-        db.save_assessment({
-            "id": assessment_id,
-            "task_id": request.task_id,
-            "domain": request.domain,
-            "status": "running",
-            "started_at": datetime.utcnow().isoformat(),
-            "run_number": run_num,
-            "batch_id": batch_id,
-            "config": {
-                "max_steps": request.max_steps,
-                "vm_image": request.vm_image,
-                "white_agent_url": request.white_agent_url or WHITE_AGENT_URL
+        db.save_assessment(
+            {
+                "id": assessment_id,
+                "task_id": request.task_id,
+                "domain": request.domain,
+                "status": "running",
+                "started_at": datetime.utcnow().isoformat(),
+                "run_number": run_num,
+                "batch_id": batch_id,
+                "config": {
+                    "max_steps": request.max_steps,
+                    "vm_image": request.vm_image,
+                    "white_agent_url": request.white_agent_url or WHITE_AGENT_URL,
+                },
             }
-        })
+        )
 
         # Create stream queue for this assessment
         active_streams[assessment_id] = asyncio.Queue()
@@ -320,7 +331,7 @@ async def launch_assessment(request: LaunchRequest):
             "assessment_id": assessment_ids[0],
             "batch_id": batch_id,
             "status": "running",
-            "monitor_url": f"/monitor/{assessment_ids[0]}"
+            "monitor_url": f"/monitor/{assessment_ids[0]}",
         }
     else:
         return {
@@ -328,11 +339,13 @@ async def launch_assessment(request: LaunchRequest):
             "assessment_ids": assessment_ids,
             "status": "running",
             "num_runs": request.num_runs,
-            "monitor_url": f"/api/batches/{batch_id}"
+            "monitor_url": f"/batch/{batch_id}",
         }
 
 
-async def _run_assessment(assessment_id: str, request: LaunchRequest, run_number: int, batch_id: str):
+async def _run_assessment(
+    assessment_id: str, request: LaunchRequest, run_number: int, batch_id: str
+):
     """Run assessment in background and update database"""
     try:
         # Build A2A task request
@@ -345,8 +358,8 @@ async def _run_assessment(assessment_id: str, request: LaunchRequest, run_number
                 "white_agent_url": request.white_agent_url or WHITE_AGENT_URL,
                 "max_steps": request.max_steps,
                 "vm_image": request.vm_image,
-                "metrics": ["success", "steps", "time_sec"]
-            }
+                "metrics": ["success", "steps", "time_sec"],
+            },
         }
 
         if request.domain:
@@ -354,10 +367,7 @@ async def _run_assessment(assessment_id: str, request: LaunchRequest, run_number
 
         # Send to green agent
         async with httpx.AsyncClient(timeout=900.0) as client:
-            response = await client.post(
-                f"{GREEN_AGENT_URL}/task",
-                json=a2a_task
-            )
+            response = await client.post(f"{GREEN_AGENT_URL}/task", json=a2a_task)
             response.raise_for_status()
             result = response.json()
 
@@ -366,62 +376,64 @@ async def _run_assessment(assessment_id: str, request: LaunchRequest, run_number
         metrics = metadata.get("metrics", {})
 
         # Update database with completion
-        db.save_assessment({
-            "id": assessment_id,
-            "task_id": request.task_id,
-            "domain": request.domain,
-            "status": "completed",
-            "started_at": datetime.utcnow().isoformat(),  # Should come from result
-            "completed_at": datetime.utcnow().isoformat(),
-            "steps": metrics.get("steps", 0),
-            "success": metrics.get("success", 0),
-            "evaluation_score": metrics.get("evaluation_score"),
-            "evaluation_method": metrics.get("evaluation_method"),
-            "failure_reason": metrics.get("failure_reason"),
-            "time_sec": metrics.get("time_sec"),
-            "vm_cost": metrics.get("vm_cost"),
-            "run_number": run_number,
-            "batch_id": batch_id,
-            "config": {
-                "max_steps": request.max_steps,
-                "vm_image": request.vm_image,
-                "white_agent_url": request.white_agent_url or WHITE_AGENT_URL
-            },
-            "result": metadata,
-            "trajectory": metrics.get("trajectory", [])
-        })
+        db.save_assessment(
+            {
+                "id": assessment_id,
+                "task_id": request.task_id,
+                "domain": request.domain,
+                "status": "completed",
+                "started_at": datetime.utcnow().isoformat(),  # Should come from result
+                "completed_at": datetime.utcnow().isoformat(),
+                "steps": metrics.get("steps", 0),
+                "success": metrics.get("success", 0),
+                "evaluation_score": metrics.get("evaluation_score"),
+                "evaluation_method": metrics.get("evaluation_method"),
+                "failure_reason": metrics.get("failure_reason"),
+                "time_sec": metrics.get("time_sec"),
+                "vm_cost": metrics.get("vm_cost"),
+                "run_number": run_number,
+                "batch_id": batch_id,
+                "config": {
+                    "max_steps": request.max_steps,
+                    "vm_image": request.vm_image,
+                    "white_agent_url": request.white_agent_url or WHITE_AGENT_URL,
+                },
+                "result": metadata,
+                "trajectory": metrics.get("trajectory", []),
+            }
+        )
 
         # Send completion event to stream
         if assessment_id in active_streams:
-            await active_streams[assessment_id].put({
-                "type": "completed",
-                "data": metrics
-            })
+            await active_streams[assessment_id].put(
+                {"type": "completed", "data": metrics}
+            )
 
-        logger.info(f"Assessment {assessment_id} completed: success={metrics.get('success')}")
+        logger.info(
+            f"Assessment {assessment_id} completed: success={metrics.get('success')}"
+        )
 
     except Exception as e:
         logger.error(f"Assessment {assessment_id} failed: {e}", exc_info=True)
 
         # Update database with failure
-        db.save_assessment({
-            "id": assessment_id,
-            "task_id": request.task_id,
-            "domain": request.domain,
-            "status": "failed",
-            "started_at": datetime.utcnow().isoformat(),
-            "completed_at": datetime.utcnow().isoformat(),
-            "failure_reason": str(e),
-            "run_number": run_number,
-            "batch_id": batch_id
-        })
+        db.save_assessment(
+            {
+                "id": assessment_id,
+                "task_id": request.task_id,
+                "domain": request.domain,
+                "status": "failed",
+                "started_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.utcnow().isoformat(),
+                "failure_reason": str(e),
+                "run_number": run_number,
+                "batch_id": batch_id,
+            }
+        )
 
         # Send error to stream
         if assessment_id in active_streams:
-            await active_streams[assessment_id].put({
-                "type": "error",
-                "error": str(e)
-            })
+            await active_streams[assessment_id].put({"type": "error", "error": str(e)})
 
     finally:
         # Cleanup stream
@@ -457,7 +469,10 @@ async def stream_assessment(assessment_id: str):
             logger.info(f"Stream cancelled for {assessment_id}")
         finally:
             # Cleanup
-            if assessment_id in active_streams and active_streams[assessment_id] == queue:
+            if (
+                assessment_id in active_streams
+                and active_streams[assessment_id] == queue
+            ):
                 del active_streams[assessment_id]
 
     return StreamingResponse(
@@ -466,7 +481,7 @@ async def stream_assessment(assessment_id: str):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-        }
+        },
     )
 
 
@@ -495,6 +510,7 @@ def get_artifact(assessment_id: str, filepath: str):
 # Batch and Statistics Endpoints
 # ============================================================================
 
+
 @app.get("/api/batches/{batch_id}")
 def get_batch(batch_id: str):
     """Get all assessments in a batch with aggregate statistics"""
@@ -510,7 +526,9 @@ def get_batch(batch_id: str):
         avg_success = sum(a.get("success", 0) for a in completed) / len(completed) * 100
         avg_steps = sum(a.get("steps", 0) for a in completed) / len(completed)
         avg_time = sum(a.get("time_sec", 0) for a in completed) / len(completed)
-        avg_score = sum(a.get("evaluation_score", 0) or 0 for a in completed) / len(completed)
+        avg_score = sum(a.get("evaluation_score", 0) or 0 for a in completed) / len(
+            completed
+        )
     else:
         avg_success = avg_steps = avg_time = avg_score = 0
 
@@ -523,8 +541,8 @@ def get_batch(batch_id: str):
             "success_rate": round(avg_success, 1),
             "avg_steps": round(avg_steps, 1),
             "avg_time_sec": round(avg_time, 1),
-            "avg_evaluation_score": round(avg_score, 3) if avg_score else None
-        }
+            "avg_evaluation_score": round(avg_score, 3) if avg_score else None,
+        },
     }
 
 
@@ -532,22 +550,18 @@ def get_batch(batch_id: str):
 def get_task_stats(task_id: str):
     """Get rolling average statistics for a task across all historical runs"""
     stats = db.get_task_statistics(task_id)
-    return {
-        "task_id": task_id,
-        **stats
-    }
+    return {"task_id": task_id, **stats}
 
 
 # ============================================================================
 # Leaderboard Endpoints
 # ============================================================================
 
+
 @app.get("/api/metrics")
 def get_metrics():
     """Get available metrics for leaderboards"""
-    return {
-        "metrics": db.get_available_metrics()
-    }
+    return {"metrics": db.get_available_metrics()}
 
 
 @app.get("/api/leaderboard")
@@ -555,7 +569,7 @@ def get_leaderboard(
     task_id: Optional[str] = None,
     metric: str = "success_rate",
     limit: int = 50,
-    domain: Optional[str] = None
+    domain: Optional[str] = None,
 ):
     """
     Unified leaderboard endpoint
@@ -577,7 +591,7 @@ def get_leaderboard(
                 "type": "task",
                 "task_id": task_id,
                 "metric": metric,
-                "leaderboard": leaderboard
+                "leaderboard": leaderboard,
             }
         else:
             # Global leaderboard
@@ -586,7 +600,7 @@ def get_leaderboard(
                 "type": "global",
                 "domain": domain,
                 "metric": metric,
-                "leaderboard": leaderboard
+                "leaderboard": leaderboard,
             }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -594,40 +608,29 @@ def get_leaderboard(
 
 @app.get("/api/leaderboard/tasks/{task_id}")
 def get_task_leaderboard_shortcut(
-    task_id: str,
-    metric: str = "success_rate",
-    limit: int = 50
+    task_id: str, metric: str = "success_rate", limit: int = 50
 ):
     """Shortcut endpoint for per-task leaderboard"""
     try:
         leaderboard = db.get_task_leaderboard(task_id, metric, limit)
-        return {
-            "task_id": task_id,
-            "metric": metric,
-            "leaderboard": leaderboard
-        }
+        return {"task_id": task_id, "metric": metric, "leaderboard": leaderboard}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/leaderboard/global")
 def get_global_leaderboard_shortcut(
-    metric: str = "success_rate",
-    limit: int = 50,
-    domain: Optional[str] = None
+    metric: str = "success_rate", limit: int = 50, domain: Optional[str] = None
 ):
     """Shortcut endpoint for global leaderboard"""
     try:
         leaderboard = db.get_global_leaderboard(metric, limit, domain)
-        return {
-            "metric": metric,
-            "domain": domain,
-            "leaderboard": leaderboard
-        }
+        return {"metric": metric, "domain": domain, "leaderboard": leaderboard}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=3001)
