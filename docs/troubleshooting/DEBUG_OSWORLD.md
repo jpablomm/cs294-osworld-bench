@@ -2,6 +2,9 @@
 
 Quick reference for debugging OSWorld issues in the SSH session.
 
+> **Status:** Legacy (Xvfb/Openbox) environment.  
+> For GNOME-based native images (`setup_osworld_gnome_v3.sh`), replace `xvfb`/`openbox` with `gdm` and adjust commands accordingly (e.g., `sudo systemctl status gdm osworld-server`).
+
 ## Quick Health Check
 
 ```bash

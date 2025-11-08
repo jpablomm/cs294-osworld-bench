@@ -96,8 +96,7 @@ cd vendor/OSWorld
 uv pip install -r requirements.txt
 cd ../..
 
-# Initialize database
-uv run python3 -c "from green_agent import storage; storage.init_db()"
+# The SQLite schema is created automatically the first time the API starts
 ```
 
 ### Step 4: Start Green Agent
@@ -230,9 +229,11 @@ gcloud compute instances create green-agent-vm-preempt \
 # Add to crontab
 crontab -e
 
-# Shutdown at 2 AM if no running assessments
-0 2 * * * /home/$USER/green_agent/scripts/auto_shutdown.sh
+# Stop the VM at 2 AM every day (adjust schedule to your needs)
+0 2 * * * gcloud compute instances stop green-agent-vm --zone=us-central1-a --quiet
 ```
+
+Make sure the user running the cron job has application-default credentials or a service account key that allows `compute.instances.stop`.
 
 ### Use Spot VMs (even cheaper)
 

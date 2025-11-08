@@ -4,6 +4,8 @@
 
 Replace the brittle Docker→QEMU→Ubuntu stack with native GCE VMs running Ubuntu Desktop directly. This eliminates 5 layers of indirection, fixes all boot issues, and provides production-grade infrastructure.
 
+> **Status:** Proposed future architecture. The Terraform, Cloud Run, and startup script snippets below are design examples and are not yet implemented in this repository.
+
 ## Architecture Overview
 
 ```

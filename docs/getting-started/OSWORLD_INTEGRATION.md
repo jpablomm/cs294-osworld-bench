@@ -7,8 +7,10 @@ This document explains how to install dependencies and test the White Agent inte
 ## Prerequisites
 
 - Python 3.11 (recommended for macOS ARM, required for some dependencies)
-- Docker Desktop (for OSWorld desktop environment provider)
 - Virtual environment activated
+- OSWorld VM (for production) or Docker Desktop (for legacy Docker mode - deprecated)
+
+> ⚠️ The bundled `white_agent/server.py` is a minimal stub that only issues `wait` actions and finishes after a handful of frames. Use it for smoke tests, but switch to `white_agent/gpt4v_server.py` (requires an OpenAI API key) or your own action-capable white agent when you need real desktop automation.
 
 ---
 
@@ -114,48 +116,53 @@ curl http://localhost:8080/assessments/<assessment_id>/results
 - time_sec: < 5 seconds
 - 10 PNG frames in `runs/<assessment_id>/frames/`
 
-### Test 2: Real OSWorld Mode (Full Integration)
+### Test 2: Native OSWorld Mode (Production)
 
 **Prerequisites:**
-- Docker Desktop running
-- OSWorld dependencies installed
-- At least 4GB RAM available
+- OSWorld VM running (from golden image)
+- Firewall rule allowing port 5000
+- See [Native Mode Guide](NATIVE_MODE.md) for VM setup
 
 ```bash
 # Terminal 1: Start White Agent
-python white_agent/server.py --port 8090
+python white_agent/server.py --port 9000
 
-# Terminal 2: Start Green Agent (real mode)
+# Terminal 2: Start Green Agent (native mode)
 export USE_FAKE_OSWORLD=0
-export OSWORLD_PROVIDER=docker
-export OSWORLD_HEADLESS=1
-export OSWORLD_MAX_STEPS=10
-uvicorn green_agent.app:app --host 0.0.0.0 --port 8080
+export USE_NATIVE_OSWORLD=1
+export OSWORLD_SERVER_URL="http://YOUR_VM_IP:5000"
+uvicorn green_agent.app:app --host 0.0.0.0 --port 8000
 
 # Terminal 3: Trigger assessment
-curl -X POST http://localhost:8080/assessments/start \
+curl -X POST http://localhost:8000/assessments/start \
   -H 'Content-Type: application/json' \
-  -d '{"task_id":"ubuntu_001","white_agent_url":"http://localhost:8090"}'
+  -d '{"task_id":"ubuntu_001","white_agent_url":"http://localhost:9000"}'
 
-# Monitor logs
-tail -f runs/<assessment_id>/osworld/osworld.log
-
-# Get result (will take several minutes)
-curl http://localhost:8080/assessments/<assessment_id>/results
+# Get result
+curl http://localhost:8000/assessments/<assessment_id>/results
 ```
 
-**Expected Behavior:**
-1. OSWorld creates Docker container with Ubuntu desktop
-2. Green Agent sends screenshots to White Agent
-3. White Agent returns actions (click, type, etc.)
-4. OSWorld executes actions in desktop environment
-5. Assessment completes after max_steps or DONE action
-6. Results saved with screenshots and trajectory log
+**What to expect with the stub white agent:**
+1. Green Agent connects to the OSWorld VM via REST API.
+2. Each step sends a screenshot to the white agent.
+3. The stub responds with `{"op": "wait"}` until it reaches its internal step limit, then returns `{"op": "done"}`.
+4. The Green Agent logs the `wait` actions, sleeps for `OSWORLD_SLEEP_AFTER_EXECUTION`, and eventually marks the run complete (usually `success=0`, `steps≈10` in native mode).
+5. Screenshots are saved under `runs/<assessment_id>/frames/`, but there will be no UI changes.
 
-**First Run Notes:**
-- Docker will download Ubuntu desktop image (~2GB)
-- First assessment may take 5-10 minutes
-- Subsequent runs are faster
+To exercise real desktop automation, swap in an action-capable white agent before rerunning the assessment:
+
+```bash
+# Example: run the GPT-4V white agent (requires OPENAI_API_KEY)
+export OPENAI_API_KEY=sk-...
+uvicorn white_agent.gpt4v_server:app --host 0.0.0.0 --port 9000
+```
+
+With a production agent you should see `click`, `type`, `execute`, and other OS interactions in the logs, and the results payload will include meaningful metrics/evaluation scores.
+
+**Native mode performance (typical with action-capable agent):**
+- Screenshot latency: ~100 ms
+- Command execution: 50–500 ms
+- Full action cycle (observe → decide → act → settle): 2–5 s
 
 ### Test 3: Verify White Agent Communication
 
@@ -175,9 +182,9 @@ def decide(obs: Observation) -> Dict[str, Any]:
 # Then run assessment and check logs
 ```
 
-### Test 4: Action Conversion Verification
+### Test 4: Legacy Action Bridge (Optional)
 
-Create a test file to verify action conversion:
+If you still use the legacy Docker/QEMU workflow, you can validate the `WhiteAgentBridge` conversion logic with a small script:
 
 ```python
 # test_action_conversion.py
@@ -188,7 +195,6 @@ from mm_agents.white_agent_bridge import WhiteAgentBridge
 
 bridge = WhiteAgentBridge("http://localhost:8090")
 
-# Test various actions
 test_cases = [
     ({"op": "click", "args": {"x": 100, "y": 200}}, "pyautogui.click(100, 200)"),
     ({"op": "hotkey", "args": {"keys": ["ctrl", "s"]}}, "pyautogui.hotkey('ctrl', 's')"),
@@ -204,7 +210,8 @@ for action_in, expected_out in test_cases:
 print("✅ All action conversions passed!")
 ```
 
-Run:
+Run it only if you rely on the legacy path:
+
 ```bash
 python test_action_conversion.py
 ```
@@ -232,14 +239,15 @@ pip install -r requirements.txt
 {"task_id":"ubuntu_001","white_agent_url":"http://localhost:8090"}
 ```
 
-### Error: "Docker provider not available"
+### Error: "OSWorld server not responding"
 
-**Cause:** Docker not running or not accessible
+**Cause:** OSWorld VM not running or unreachable
 
 **Solutions:**
-1. Start Docker Desktop
-2. Verify Docker is running: `docker ps`
-3. Check Docker permissions: `docker run hello-world`
+1. Check VM is running: `gcloud compute instances list`
+2. Verify firewall allows port 5000
+3. Test connectivity: `curl http://VM_IP:5000/platform`
+4. SSH into VM and check service: `sudo systemctl status osworld-server`
 
 ### Error: "Connection refused to White Agent"
 
@@ -254,8 +262,8 @@ pip install -r requirements.txt
 
 **Solutions:**
 1. Reduce max_steps: `export OSWORLD_MAX_STEPS=5`
-2. Use headless mode: `export OSWORLD_HEADLESS=1`
-3. Ensure Docker has enough resources (4GB+ RAM)
+2. Use native mode (not Docker): `export USE_NATIVE_OSWORLD=1`
+3. Ensure VM has enough resources (n1-standard-4 recommended)
 
 ### macOS Specific: "No module named 'wrapt_timeout_decorator'"
 
@@ -293,14 +301,14 @@ Use this checklist to verify the integration is working:
 
 Expected performance on different systems:
 
-| System | Fake Mode | Real OSWorld (10 steps) |
-|--------|-----------|------------------------|
-| macOS M1 (8GB) | 2-3 sec | 3-5 min |
-| macOS M1 (16GB) | 2-3 sec | 2-3 min |
-| Linux x86 (16GB) | 2-3 sec | 2-4 min |
-| Linux x86 (32GB) | 2-3 sec | 1-2 min |
+| System | Fake Mode (10 steps) | Native Mode (10 steps) |
+|--------|----------------------|------------------------|
+| macOS M1 (8GB) | 2–3 s | 6–8 s |
+| macOS M1 (16GB) | 2–3 s | 4–6 s |
+| Linux x86 (16GB) | 2–3 s | 3–5 s |
+| Linux x86 (32GB) | 2–3 s | 3–4 s |
 
-*Note: First run includes Docker image download (~2GB) which adds 5-10 minutes*
+*Numbers are typical once the VM is booted and an action-capable white agent is running. The first native run may include an extra few seconds while caches warm up.*
 
 ---
 
@@ -330,51 +338,34 @@ If you encounter issues not covered here:
 
 ## Architecture Overview
 
+**Native Mode (Recommended):**
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Green Agent (FastAPI)                                   │
 │ ├─ POST /assessments/start                              │
-│ │  ├─ Loads task from tasks/<task_id>.json             │
-│ │  ├─ Creates assessment_id and artifacts directory     │
-│ │  └─ Calls run_osworld(task, ..., white_agent_url)   │
 │ └─ osworld_adapter.py                                   │
-│    ├─ Fake Mode: Generates synthetic screenshots        │
-│    └─ Real Mode: Uses OSWorld library ──────────────┐   │
+│    └─ Native Mode: REST API to OSWorld VM ──────────┐   │
 └─────────────────────────────────────────────────────│───┘
                                                       │
+                                                      │ HTTP REST
                                                       ▼
 ┌─────────────────────────────────────────────────────────┐
-│ OSWorld Library (vendor/OSWorld)                        │
-│ ├─ DesktopEnv: Manages Docker container with Ubuntu     │
-│ ├─ WhiteAgentBridge: Forwards observations to HTTP API  │
-│ └─ lib_run_single: Runs evaluation loop                │
-│    └─ For each step:                                    │
-│       1. Get screenshot from environment ───────────┐   │
-│       2. Send to White Agent Bridge                 │   │
-│       3. Receive action                            │   │
-│       4. Execute in environment                    │   │
-│       5. Check if done                             │   │
-└────────────────────────────────────────────────────│───┘
-                                                      │
-                                                      ▼
-┌─────────────────────────────────────────────────────────┐
-│ White Agent Bridge (mm_agents/white_agent_bridge.py)    │
-│ ├─ predict(instruction, obs):                           │
-│ │  ├─ Converts obs["screenshot"] to base64             │
-│ │  ├─ POST to white_agent_url/decide                   │
-│ │  └─ Converts action to pyautogui format              │
-│ └─ reset(): POST to white_agent_url/reset             │
+│ OSWorld VM (GCE)                                        │
+│ ├─ OSWorld Server (Flask :5000)                        │
+│ ├─ GNOME Desktop Environment                            │
+│ └─ Applications (Chrome, Firefox, etc.)                │
 └─────────────────────────────────────────────────────────┘
                           │
-                          ▼ HTTP
+                          │ HTTP
+                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│ White Agent (FastAPI on port 8090)                      │
-│ ├─ POST /reset: Prepare for new assessment              │
-│ └─ POST /decide:                                        │
-│    ├─ Receives: frame_id, image_png_b64, ui_hint       │
-│    └─ Returns: {"op": "click", "args": {"x": 200, ...}}│
+│ White Agent (FastAPI)                                   │
+│ ├─ POST /decide: Returns actions                         │
+│ └─ Receives: screenshots, returns: click/type/etc.     │
 └─────────────────────────────────────────────────────────┘
 ```
+
+See [Native Mode Guide](NATIVE_MODE.md) for complete architecture details.
 
 ---
 

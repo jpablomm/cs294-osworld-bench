@@ -6,6 +6,7 @@ Serves static HTML/CSS/JS files and provides REST API for data.
 """
 
 import asyncio
+import os
 import httpx
 import json
 import logging
@@ -42,7 +43,20 @@ app.add_middleware(
 )
 
 # Initialize database
-db = AssessmentDB("webui_assessments.db")
+USE_POSTGRES = os.getenv("USE_POSTGRES", "0") == "1"
+
+if USE_POSTGRES:
+    try:
+        from .database_postgres import PostgresDatabase
+
+        db = PostgresDatabase()
+        logger.info("Using PostgreSQL database")
+    except Exception as e:
+        logger.error("Failed to initialize PostgreSQL database: %s", e)
+        raise
+else:
+    db = AssessmentDB("webui_assessments.db")
+    logger.info("Using SQLite database at webui_assessments.db")
 
 # Configuration
 GREEN_AGENT_URL = "http://localhost:8001"

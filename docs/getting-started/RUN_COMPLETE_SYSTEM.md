@@ -34,6 +34,8 @@ This guide shows how to run the complete system: White Agent → Green Agent →
 3. ✅ Green Agent configured for native mode
 4. ✅ White Agent code updated
 
+> ⚠️ The bundled `white_agent/server.py` is a minimal stub that only issues `wait` actions and exits after a few frames. Use it for smoke tests, but switch to `white_agent/gpt4v_server.py` or your own white agent implementation when you need real desktop automation.
+
 ---
 
 ## Step 1: Start OSWorld VM (if not running)
@@ -47,7 +49,7 @@ gcloud compute instances start osworld-1 --zone=us-central1-a
 
 # Or create a new one
 gcloud compute instances create osworld-1 \
-  --image=osworld-golden-v1 \
+  --image=osworld-golden-v2-gnome \
   --machine-type=n1-standard-4 \
   --zone=us-central1-a
 
@@ -67,13 +69,13 @@ curl http://$OSWORLD_IP:5000/platform
 
 ## Step 2: Start White Agent
 
-**Terminal 1:**
+**Terminal 1 (baseline stub):**
 
 ```bash
 cd green_agent
 source .venv/bin/activate
 
-# Start White Agent on port 9000
+# Start the stub white agent on port 9000
 python white_agent/server.py --port 9000
 
 # You should see:
@@ -81,7 +83,8 @@ python white_agent/server.py --port 9000
 # INFO: Application startup complete
 ```
 
-**Leave this terminal running!**
+**Leave this terminal running!**  
+For real task execution, swap the stub with `uvicorn white_agent.gpt4v_server:app --port 9000` (requires a valid OpenAI API key) or your own implementation that issues desktop actions.
 
 ---
 
@@ -184,10 +187,10 @@ curl -X POST http://localhost:8000/assessments/start \
 
 **Watch the logs in Terminal 1 (White Agent) and Terminal 2 (Green Agent)!**
 
-You should see:
-- **White Agent:** Decision logs for each step
-- **Green Agent:** OSWorld interaction logs
-- **Progress:** Step 1/15, Step 2/15, etc.
+With the stub white agent you should see:
+- **White Agent:** `INFO ... Observing...` followed by `INFO ... Max steps reached, finishing`
+- **Green Agent:** `INFO ... White agent action: wait` for each step, then `White agent action: DONE`
+- **Progress:** Step counter ticking up until the stub stops (default 10 steps)
 
 ---
 
@@ -207,16 +210,7 @@ curl http://localhost:8000/assessments/$ASSESSMENT_ID/results
 curl http://localhost:8000/assessments/$ASSESSMENT_ID/artifacts
 ```
 
-**Expected result:**
-```json
-{
-  "assessment_id": "abc123...",
-  "success": 1,
-  "steps": 2,
-  "time_sec": 8.5,
-  "failure_reason": null
-}
-```
+**What to expect:** the stub agent typically reports ~10 steps, `success` may be `0` (native mode requires an evaluator) or `1` (fake mode), and `failure_reason` will usually be empty. For meaningful success metrics you must run a real white agent that completes the task and (optionally) enables OSWorld evaluators.
 
 ---
 
@@ -235,33 +229,13 @@ open runs/$ASSESSMENT_ID/frames/*.png
 eog runs/$ASSESSMENT_ID/frames/*.png
 ```
 
-You should see:
-- `step_0001.png` - Initial desktop
-- `step_0002.png` - After White Agent's action
-- etc.
+You should see a sequence of screenshots saved in `frames/`. With the stub agent they will mostly be identical because no UI actions are performed; when you plug in an action-capable agent you can review each step of the trajectory here.
 
 ---
 
-## Step 9: Run Chrome Task
+## Step 9: Run a Task with a Real White Agent
 
-```bash
-# Run Chrome task
-curl -X POST http://localhost:8000/assessments/start \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task_id": "test_chrome",
-    "white_agent_url": "http://localhost:9000"
-  }'
-
-# Wait ~15 seconds
-sleep 15
-
-# Check results
-curl http://localhost:8000/assessments/$NEW_ASSESSMENT_ID/results
-
-# View screenshots - should show Chrome!
-open runs/$NEW_ASSESSMENT_ID/frames/*.png
-```
+Once you replace the stub with an action-capable agent (for example `white_agent/gpt4v_server.py`), rerun the assessment commands above. The new agent will issue clicks/typing, the screenshots will show UI changes, and `success` will reflect the evaluator output. Remember to update the `white_agent_url` parameter to match the port your production agent listens on.
 
 ---
 
@@ -270,33 +244,30 @@ open runs/$NEW_ASSESSMENT_ID/frames/*.png
 ### White Agent (Terminal 1)
 
 ```
-INFO: Step 1: Deciding action for instruction: open google chrome and navigate to google.com
-INFO: Step 1: Opening Chrome
-INFO: Step 2: Deciding action for instruction: open google chrome and navigate to google.com
-INFO: Step 2: Waiting for Chrome to load
-INFO: Step 3: Deciding action for instruction: open google chrome and navigate to google.com
-INFO: Step 3: Chrome task complete
+INFO: Step 0: Deciding action for instruction: capture a screenshot of the desktop
+INFO: Step 0: Observing...
+INFO: Step 1: Deciding action for instruction: capture a screenshot of the desktop
+INFO: Step 1: Observing...
+...
+INFO: Step 10: Max steps reached, finishing
 ```
 
 ### Green Agent (Terminal 2)
 
 ```
 INFO: Using NATIVE OSWorld mode (REST API)
-INFO: Starting native OSWorld for task: test_chrome
-INFO: OSWorld server: http://34.58.225.82:5000
+INFO: Starting native OSWorld for task: test_screenshot
 INFO: OSWorld server health check passed
-INFO: Initial screenshot: 6212 bytes
 INFO: Step 1/15
-INFO: White agent action: execute
-INFO: Executed: google-chrome --no-sandbox ..., result: success
+INFO: White agent action: wait
 INFO: Step 2/15
-INFO: White agent action: execute
-INFO: Executed: sleep 2, result: success
-INFO: Step 3/15
+INFO: White agent action: wait
+...
 INFO: White agent action: DONE
-INFO: White agent signaled DONE
-INFO: Native OSWorld completed: success=1, steps=3, time=12.5s
+INFO: Native OSWorld completed: success=0, steps=10, time=32.6s
 ```
+
+After you replace the stub with an action-capable white agent, expect to see `click`, `type`, `execute`, and evaluator messages instead of the `wait` loop above.
 
 ---
 

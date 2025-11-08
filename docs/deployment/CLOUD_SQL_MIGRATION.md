@@ -524,18 +524,18 @@ Update `orchestrator/webui_server.py` to support both databases:
 
 ```python
 import os
-from orchestrator.database import Database as SQLiteDatabase
-from orchestrator.database_postgres import PostgresDatabase
+from .database import AssessmentDB
 
-# Determine which database to use
 USE_POSTGRES = os.getenv("USE_POSTGRES", "0") == "1"
 
 if USE_POSTGRES:
+    from .database_postgres import PostgresDatabase
+
     db = PostgresDatabase()
     logger.info("Using PostgreSQL database")
 else:
-    db = SQLiteDatabase("webui_assessments.db")
-    logger.info("Using SQLite database")
+    db = AssessmentDB("webui_assessments.db")
+    logger.info("Using SQLite database at webui_assessments.db")
 ```
 
 ### Phase 4: Data Migration
