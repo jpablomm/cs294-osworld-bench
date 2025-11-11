@@ -101,21 +101,25 @@ The API client (`lib/api/client.ts`) automatically connects to:
 
 ## 📊 Available Pages
 
-### Current (Phase 1 - ✅ Complete)
+### Phase 1 - ✅ Complete
 
 - **Dashboard** (`/`) - System stats and recent assessments
-- Header with navigation and health status
 
-### Coming Soon (Phase 2)
+### Phase 2 - ✅ Complete
 
-- **Launch** (`/launch`) - Launch new assessments
-- **Results** (`/results`) - Browse assessment results
-- **Leaderboard** (`/leaderboard`) - Agent rankings
-- **Assessment View** (`/assessment/[id]`) - Real-time agent interaction visualization
+- **Launch** (`/launch`) - Task selector with search, filters, and configuration
+- **Results** (`/results`) - Assessment browser with filtering and CSV export
+- **Leaderboard** (`/leaderboard`) - Rankings by success rate, steps, time, or score
+- **Assessment Detail** (`/assessment/[id]`) - Individual assessment overview
+- **Batch Detail** (`/batch/[id]`) - Batch assessment statistics
 
-## 🎯 Phase 1 Completion Summary
+### Coming Soon (Phase 4)
 
-✅ **Completed:**
+- **Agent Interaction View** - Real-time A2A message visualization and tool execution timeline
+
+## 🎯 Phase Completion Summary
+
+### Phase 1 - ✅ Complete
 1. Next.js 15 initialized with TypeScript, Tailwind, App Router
 2. Dependencies installed (TanStack Query, shadcn/ui, Framer Motion, etc.)
 3. TypeScript types created for all API models
@@ -126,6 +130,18 @@ The API client (`lib/api/client.ts`) automatically connects to:
 8. Dark theme with custom agent colors
 9. Dashboard page with stats and recent assessments
 10. Development server running on port 3000
+
+### Phase 2 - ✅ Complete
+1. Launch page with task selector, search, and configuration
+2. Results page with filtering, sorting, and CSV export
+3. Leaderboard page with ranking by multiple metrics
+4. Assessment detail page with trajectory view
+5. Batch detail page with aggregate statistics
+6. Reusable AssessmentTable component
+7. All navigation routes functional
+8. Responsive design for mobile, tablet, desktop
+9. Empty states and error handling
+10. Full type safety maintained (0 linting errors)
 
 ## 🔌 API Integration
 
