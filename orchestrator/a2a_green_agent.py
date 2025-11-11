@@ -306,7 +306,7 @@ async def _execute_assessment(
         logger.info(f"VM created: {vm_info['vm_name']} at {vm_info['vm_ip']}")
 
         # Step 2: Wait for VM ready
-        logger.info("Waiting for VM to be ready...")
+        logger.info("Waiting for VM to be ready (timeout: 600s)...")
         vm_ready = await asyncio.to_thread(
             vm_manager.wait_for_vm_ready,
             vm_info["vm_ip"],
@@ -314,7 +314,9 @@ async def _execute_assessment(
         )
 
         if not vm_ready:
-            raise Exception("VM did not become ready in time")
+            logger.error(f"VM {vm_info['vm_ip']} did not become ready within 600 seconds")
+            logger.info(f"Will cleanup VM {assessment_id} due to timeout")
+            raise TimeoutError(f"VM {vm_info['vm_ip']} failed to become ready within 600 seconds (timeout)")
 
         # Step 2.5: Execute OSWorld task setup
         # Load full OSWorld task with config
@@ -446,20 +448,24 @@ async def _execute_assessment(
         return result
 
     except Exception as e:
-        logger.error(f"Assessment failed: {e}", exc_info=True)
+        error_type = type(e).__name__
+        logger.error(f"Assessment failed ({error_type}): {e}", exc_info=True)
 
-        # Cleanup VM on failure
+        # Cleanup VM on failure (including timeouts)
         if vm_info:
             try:
+                logger.info(f"Cleaning up VM {vm_info['vm_name']} ({assessment_id}) due to failure...")
                 await asyncio.to_thread(
                     vm_manager.delete_vm,
                     assessment_id
                 )
+                logger.info(f"VM {vm_info['vm_name']} successfully cleaned up")
             except Exception as cleanup_error:
-                logger.error(f"Cleanup failed: {cleanup_error}")
+                logger.error(f"VM cleanup failed for {assessment_id}: {cleanup_error}", exc_info=True)
 
         active_assessments[assessment_id]["status"] = "failed"
         active_assessments[assessment_id]["error"] = str(e)
+        active_assessments[assessment_id]["error_type"] = error_type
 
         raise
 
@@ -494,75 +500,177 @@ def _build_osworld_tool_descriptions(vm_ip: str) -> list[Dict[str, Any]]:
     This follows the AgentBeats Approach II pattern:
     Tools are described in the A2A message, not via MCP.
 
+    NOTE: This function still accepts vm_ip for internal routing but does NOT
+    expose infrastructure details in the tool descriptions returned to agents.
+
     Returns list of tool specifications compatible with LLM function calling.
     """
+    # Internal endpoint mapping (not exposed to agents)
     osworld_base_url = f"http://{vm_ip}:5000"
+    _internal_endpoints = {
+        "screenshot": (f"{osworld_base_url}/screenshot", "GET"),
+        "execute_python": (f"{osworld_base_url}/execute", "POST"),
+        "execute_command": (f"{osworld_base_url}/execute", "POST"),
+        "click": (f"{osworld_base_url}/action", "POST"),
+        "type_text": (f"{osworld_base_url}/action", "POST"),
+        "hotkey": (f"{osworld_base_url}/action", "POST"),
+        "scroll": (f"{osworld_base_url}/action", "POST"),
+        "wait": (None, "LOCAL")
+    }
 
     return [
         {
             "name": "screenshot",
-            "description": "Capture a screenshot of the current desktop state",
+            "description": "Capture a screenshot of the current desktop state. Use this to observe what's visible on the screen before deciding on actions.",
             "parameters": {
                 "type": "object",
                 "properties": {},
                 "required": []
             },
-            "endpoint": f"{osworld_base_url}/screenshot",
-            "method": "GET",
-            "returns": "PNG image (binary)"
+            "returns": {
+                "content_type": "image/png",
+                "schema": {"type": "string", "format": "binary"},
+                "description": "PNG image of the desktop (base64-encoded in JSON responses)"
+            },
+            "examples": [
+                {
+                    "description": "Capture current screen state",
+                    "input": {},
+                    "output": "PNG image data"
+                }
+            ],
+            "validation": {
+                "parameter_rules": {}
+            },
+            "metadata": {
+                "category": "observation",
+                "tags": ["screen", "vision", "observation"],
+                "complexity": "simple",
+                "safety_level": "safe"
+            }
         },
         {
             "name": "execute_python",
-            "description": "Execute Python code in the desktop environment. Use for complex automation tasks.",
+            "description": "Execute Python code in the desktop environment. Use for complex automation tasks that require logic, loops, or API calls. The code runs with desktop automation libraries available (pyautogui, subprocess, etc.).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "Python code to execute"
+                        "description": "Python code to execute. Must be valid Python 3 syntax.",
+                        "minLength": 1,
+                        "maxLength": 50000
                     }
                 },
                 "required": ["code"]
             },
-            "endpoint": f"{osworld_base_url}/execute",
-            "method": "POST",
-            "returns": "Execution result with stdout/stderr"
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success", "error"]},
+                        "stdout": {"type": "string"},
+                        "stderr": {"type": "string"},
+                        "exit_code": {"type": "integer"}
+                    }
+                },
+                "description": "Execution result with stdout, stderr, and exit code"
+            },
+            "examples": [
+                {
+                    "description": "Print hello world",
+                    "input": {"code": "print('Hello, World!')"},
+                    "output": {"status": "success", "stdout": "Hello, World!\n", "stderr": "", "exit_code": 0}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "code": {
+                        "validator": "text",
+                        "bounds": {"min": 1, "max": 50000}
+                    }
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["python", "automation", "advanced"],
+                "complexity": "complex",
+                "safety_level": "requires_validation"
+            }
         },
         {
             "name": "execute_command",
-            "description": "Execute a shell command or launch an application",
+            "description": "Execute a shell command or launch an application. Use this to start programs, run system commands, or perform file operations.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Shell command to execute"
+                        "description": "Shell command to execute (e.g., 'google-chrome', 'ls -la')",
+                        "minLength": 1,
+                        "maxLength": 10000
                     },
                     "shell": {
                         "type": "boolean",
-                        "description": "Whether to run command through shell",
+                        "description": "Whether to run command through shell interpreter",
                         "default": True
                     }
                 },
                 "required": ["command"]
             },
-            "endpoint": f"{osworld_base_url}/execute",
-            "method": "POST",
-            "returns": "Command execution result"
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success", "error"]},
+                        "stdout": {"type": "string"},
+                        "stderr": {"type": "string"},
+                        "exit_code": {"type": "integer"}
+                    }
+                },
+                "description": "Command execution result with output streams"
+            },
+            "examples": [
+                {
+                    "description": "Launch Chrome browser",
+                    "input": {"command": "google-chrome"},
+                    "output": {"status": "success", "exit_code": 0}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "command": {
+                        "validator": "text",
+                        "bounds": {"min": 1, "max": 10000}
+                    }
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["command", "shell", "application"],
+                "complexity": "moderate",
+                "safety_level": "requires_validation"
+            }
         },
         {
             "name": "click",
-            "description": "Perform a mouse click at specific screen coordinates",
+            "description": "Perform a mouse click at specific screen coordinates. Typical screen resolution is 1920x1080 pixels, with (0,0) at the top-left corner.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "x": {
                         "type": "integer",
-                        "description": "X coordinate on screen"
+                        "description": "Horizontal position in pixels from left edge (0-1920)",
+                        "minimum": 0,
+                        "maximum": 1920
                     },
                     "y": {
                         "type": "integer",
-                        "description": "Y coordinate on screen"
+                        "description": "Vertical position in pixels from top edge (0-1080)",
+                        "minimum": 0,
+                        "maximum": 1080
                     },
                     "button": {
                         "type": "string",
@@ -573,62 +681,204 @@ def _build_osworld_tool_descriptions(vm_ip: str) -> list[Dict[str, Any]]:
                 },
                 "required": ["x", "y"]
             },
-            "endpoint": f"{osworld_base_url}/action",
-            "method": "POST",
-            "returns": "Action execution status"
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success", "error"]},
+                        "message": {"type": "string"}
+                    }
+                },
+                "description": "Confirmation of click execution"
+            },
+            "examples": [
+                {
+                    "description": "Click center of screen",
+                    "input": {"x": 960, "y": 540},
+                    "output": {"status": "success", "message": "Clicked at (960, 540)"}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "x": {
+                        "validator": "coordinate",
+                        "bounds": {"min": 0, "max": 1920}
+                    },
+                    "y": {
+                        "validator": "coordinate",
+                        "bounds": {"min": 0, "max": 1080}
+                    }
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["mouse", "click", "interaction"],
+                "complexity": "simple",
+                "safety_level": "safe"
+            }
         },
         {
             "name": "type_text",
-            "description": "Type text using keyboard input",
+            "description": "Type text using keyboard input. The text will be entered at the current cursor position. Use this for filling forms, entering search queries, or writing text.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "text": {
                         "type": "string",
-                        "description": "Text to type"
+                        "description": "Text to type (supports alphanumeric, spaces, and common punctuation)",
+                        "minLength": 1,
+                        "maxLength": 10000
                     }
                 },
                 "required": ["text"]
             },
-            "endpoint": f"{osworld_base_url}/action",
-            "method": "POST",
-            "returns": "Action execution status"
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success", "error"]},
+                        "characters_typed": {"type": "integer"},
+                        "message": {"type": "string"}
+                    }
+                },
+                "description": "Confirmation of text entry"
+            },
+            "examples": [
+                {
+                    "description": "Type a search query",
+                    "input": {"text": "machine learning papers"},
+                    "output": {"status": "success", "characters_typed": 24}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "text": {
+                        "validator": "text",
+                        "bounds": {"min": 1, "max": 10000}
+                    }
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["keyboard", "text", "input"],
+                "complexity": "simple",
+                "safety_level": "safe"
+            }
         },
         {
             "name": "hotkey",
-            "description": "Press keyboard hotkey combination (e.g., Ctrl+C, Alt+Tab)",
+            "description": "Press a keyboard hotkey combination (e.g., Ctrl+C for copy, Alt+Tab to switch windows). Common modifiers: ctrl, alt, shift, cmd/win.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "keys": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of keys to press together (e.g., ['ctrl', 'c'])"
+                        "description": "List of keys to press together. First keys are modifiers (ctrl, alt, shift), last key is the action key (c, v, tab, etc.)",
+                        "minItems": 1,
+                        "maxItems": 4
                     }
                 },
                 "required": ["keys"]
             },
-            "endpoint": f"{osworld_base_url}/action",
-            "method": "POST",
-            "returns": "Action execution status"
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success", "error"]},
+                        "keys_pressed": {"type": "array", "items": {"type": "string"}},
+                        "message": {"type": "string"}
+                    }
+                },
+                "description": "Confirmation of hotkey execution"
+            },
+            "examples": [
+                {
+                    "description": "Copy text (Ctrl+C)",
+                    "input": {"keys": ["ctrl", "c"]},
+                    "output": {"status": "success", "keys_pressed": ["ctrl", "c"]}
+                },
+                {
+                    "description": "Switch window (Alt+Tab)",
+                    "input": {"keys": ["alt", "tab"]},
+                    "output": {"status": "success", "keys_pressed": ["alt", "tab"]}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "keys": {
+                        "validator": "keys",
+                        "allowed_values": [
+                            "ctrl", "alt", "shift", "cmd", "win",
+                            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                            "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+                            "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+                            "enter", "tab", "space", "backspace", "delete", "escape",
+                            "up", "down", "left", "right",
+                            "home", "end", "pageup", "pagedown"
+                        ]
+                    }
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["keyboard", "hotkey", "shortcut"],
+                "complexity": "moderate",
+                "safety_level": "safe"
+            }
         },
         {
             "name": "wait",
-            "description": "Wait for a specified duration (useful between actions)",
+            "description": "Wait for a specified duration. Useful for allowing UI to update between actions or waiting for applications to load.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "duration": {
                         "type": "number",
-                        "description": "Duration to wait in seconds",
+                        "description": "Duration to wait in seconds (0.1 to 30.0)",
+                        "minimum": 0.1,
+                        "maximum": 30.0,
                         "default": 1.0
                     }
                 },
                 "required": []
             },
-            "endpoint": None,
-            "method": "LOCAL",
-            "returns": "None (client-side wait)"
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success"]},
+                        "duration": {"type": "number"}
+                    }
+                },
+                "description": "Confirmation of wait completion"
+            },
+            "examples": [
+                {
+                    "description": "Wait 2 seconds",
+                    "input": {"duration": 2.0},
+                    "output": {"status": "success", "duration": 2.0}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "duration": {
+                        "validator": "number",
+                        "bounds": {"min": 0.1, "max": 30.0}
+                    }
+                }
+            },
+            "metadata": {
+                "category": "utility",
+                "tags": ["timing", "delay", "wait"],
+                "complexity": "simple",
+                "safety_level": "safe"
+            }
         }
     ]
 
@@ -638,7 +888,8 @@ def _format_task_message_with_tools(task: Dict[str, Any], tools: list[Dict[str, 
     Format task message with embedded tool descriptions
 
     This follows the Tau-Bench/AgentBeats pattern where tools are described
-    in natural language within the task message.
+    in natural language within the task message, with JSON examples showing
+    the expected format.
     """
     task_instruction = task.get("instruction", "Complete the task")
 
@@ -647,18 +898,61 @@ def _format_task_message_with_tools(task: Dict[str, Any], tools: list[Dict[str, 
     tools_doc += "You have access to the following tools for desktop automation:\n\n"
 
     for tool in tools:
-        tools_doc += f"## {tool['name']}\n"
+        tools_doc += f"## {tool['name']}\n\n"
         tools_doc += f"{tool['description']}\n\n"
 
+        # Parameters
         if tool['parameters']['properties']:
-            tools_doc += "Parameters:\n"
+            tools_doc += "**Parameters:**\n"
             for param_name, param_spec in tool['parameters']['properties'].items():
-                required = " (required)" if param_name in tool['parameters'].get('required', []) else ""
-                tools_doc += f"- `{param_name}` ({param_spec['type']}){required}: {param_spec.get('description', '')}\n"
+                required_marker = " (required)" if param_name in tool['parameters'].get('required', []) else " (optional)"
+                param_type = param_spec['type']
+
+                # Add bounds/constraints info
+                constraints = []
+                if 'minimum' in param_spec:
+                    constraints.append(f"min: {param_spec['minimum']}")
+                if 'maximum' in param_spec:
+                    constraints.append(f"max: {param_spec['maximum']}")
+                if 'enum' in param_spec:
+                    constraints.append(f"values: {', '.join(param_spec['enum'])}")
+                if 'default' in param_spec:
+                    constraints.append(f"default: {param_spec['default']}")
+
+                constraint_str = f" [{', '.join(constraints)}]" if constraints else ""
+
+                tools_doc += f"- `{param_name}` ({param_type}){required_marker}{constraint_str}: {param_spec.get('description', '')}\n"
         else:
-            tools_doc += "No parameters required.\n"
+            tools_doc += "**Parameters:** None\n"
 
         tools_doc += "\n"
+
+        # Returns
+        if 'returns' in tool:
+            returns_desc = tool['returns'].get('description', 'Action result')
+            tools_doc += f"**Returns:** {returns_desc}\n\n"
+
+        # Examples
+        if 'examples' in tool and tool['examples']:
+            tools_doc += "**Examples:**\n"
+            for example in tool['examples'][:2]:  # Show max 2 examples
+                example_desc = example.get('description', 'Example usage')
+                example_input = example.get('input', {})
+                tools_doc += f"- {example_desc}:\n"
+                tools_doc += f"  ```json\n"
+                if example_input:
+                    tools_doc += f'  {{"op": "{tool["name"]}", "args": {json.dumps(example_input)}}}\n'
+                else:
+                    tools_doc += f'  {{"op": "{tool["name"]}"}}\n'
+                tools_doc += f"  ```\n"
+            tools_doc += "\n"
+
+    # Add format specification
+    tools_doc += "\n---\n\n"
+    tools_doc += "**Action Format:** Return actions as JSON with `op` (operation name) and `args` (parameters) fields:\n"
+    tools_doc += "```json\n"
+    tools_doc += '{"op": "tool_name", "args": {"param1": "value1", "param2": "value2"}}\n'
+    tools_doc += "```\n\n"
 
     # Combine task instruction with tools
     message = f"""
@@ -668,16 +962,128 @@ def _format_task_message_with_tools(task: Dict[str, Any], tools: list[Dict[str, 
 
 {task_instruction}
 
-Please complete this task using the available tools. For each step:
-1. Take a screenshot to observe the current state
-2. Decide on the appropriate action
-3. Execute the action using the tools above
-4. Verify the result with another screenshot
+**Instructions:**
+1. Take a screenshot first to observe the current state
+2. Analyze what you see and decide on the appropriate action
+3. Execute actions using the format shown above
+4. After important actions, take another screenshot to verify results
+5. Continue until the task is complete
+6. When finished, return {{"op": "done"}}
 
 You have a maximum of 15 steps to complete the task.
 """.strip()
 
     return message
+
+
+def _validate_white_agent_response(response_data: Dict[str, Any], tools: list[Dict[str, Any]]) -> tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Validate white agent response structure and extract action
+
+    Validates:
+    - Response has required A2A fields (role, content, metadata)
+    - metadata.action exists and has required structure
+    - Action op is valid (matches a known tool)
+    - Action args match tool parameter requirements
+
+    Args:
+        response_data: Parsed JSON response from white agent
+        tools: List of available tool specifications
+
+    Returns:
+        tuple of (is_valid, error_message, action)
+        - is_valid: True if response is valid
+        - error_message: Error description if invalid, None otherwise
+        - action: Extracted action dict if valid, None otherwise
+    """
+    # Check top-level A2A message structure
+    if not isinstance(response_data, dict):
+        return False, "Response must be a JSON object", None
+
+    if "role" not in response_data:
+        return False, "Response missing required field: role", None
+
+    if "content" not in response_data:
+        return False, "Response missing required field: content", None
+
+    if "metadata" not in response_data:
+        return False, "Response missing required field: metadata", None
+
+    metadata = response_data["metadata"]
+    if not isinstance(metadata, dict):
+        return False, "metadata must be an object", None
+
+    # Check for action in metadata
+    if "action" not in metadata:
+        # Check if there's an error instead
+        if "error" in metadata:
+            return False, f"White agent reported error: {metadata['error']}", None
+        return False, "Response metadata missing required field: action", None
+
+    action = metadata["action"]
+    if not isinstance(action, dict):
+        return False, "action must be an object", None
+
+    # Validate action structure
+    if "op" not in action:
+        return False, "action missing required field: op (operation name)", None
+
+    op = action["op"]
+    if not isinstance(op, str):
+        return False, "action.op must be a string", None
+
+    # Special case: "done" action
+    if op == "done":
+        return True, None, action
+
+    # Check if op matches a known tool
+    tool_names = [t["name"] for t in tools]
+    if op not in tool_names:
+        return False, f"Unknown operation: {op}. Valid operations: {', '.join(tool_names)}", None
+
+    # Find the tool specification
+    tool_spec = next((t for t in tools if t["name"] == op), None)
+    if not tool_spec:
+        return False, f"Tool specification not found for: {op}", None
+
+    # Validate action args
+    args = action.get("args", {})
+    if not isinstance(args, dict):
+        return False, f"action.args must be an object, got {type(args).__name__}", None
+
+    # Check required parameters
+    required_params = tool_spec["parameters"].get("required", [])
+    for param in required_params:
+        if param not in args:
+            return False, f"Missing required parameter for {op}: {param}", None
+
+    # Validate parameter types (basic validation)
+    properties = tool_spec["parameters"].get("properties", {})
+    for param_name, param_value in args.items():
+        if param_name not in properties:
+            # Warn about unknown parameters but don't fail
+            logger.warning(f"Unknown parameter {param_name} for {op}")
+            continue
+
+        param_spec = properties[param_name]
+        expected_type = param_spec["type"]
+
+        # Type checking
+        type_map = {
+            "string": str,
+            "integer": int,
+            "number": (int, float),
+            "boolean": bool,
+            "array": list,
+            "object": dict
+        }
+
+        if expected_type in type_map:
+            expected_python_type = type_map[expected_type]
+            if not isinstance(param_value, expected_python_type):
+                return False, f"Parameter {param_name} must be {expected_type}, got {type(param_value).__name__}", None
+
+    return True, None, action
 
 
 async def _execute_with_white_agent(
@@ -723,6 +1129,9 @@ async def _execute_with_white_agent(
     failure_reason = None
     trajectory = []
 
+    # Extract tools for validation
+    tools = task_dict["metadata"].get("tools", [])
+
     async with httpx.AsyncClient(timeout=300.0) as client:
         try:
             # Step 1: Send initial task to white agent
@@ -765,14 +1174,14 @@ async def _execute_with_white_agent(
 
                 message = response.json()
 
-                # Check for error responses
-                if "action" not in message.get("metadata", {}):
-                    error_msg = message.get("metadata", {}).get("error", "Unknown error")
-                    logger.error(f"White agent returned error: {error_msg}")
+                # Validate white agent response
+                is_valid, error_msg, action = _validate_white_agent_response(message, tools)
+                if not is_valid:
+                    logger.error(f"Invalid white agent response: {error_msg}")
                     logger.error(f"Full response: {message}")
-                    raise RuntimeError(f"White agent error: {error_msg}")
+                    failure_reason = f"Invalid response: {error_msg}"
+                    raise RuntimeError(f"White agent response validation failed: {error_msg}")
 
-                action = message["metadata"]["action"]
                 is_done = message["metadata"].get("done", False)
 
                 logger.info(f"White agent action: {action['op']}")

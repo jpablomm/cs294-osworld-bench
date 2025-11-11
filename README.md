@@ -147,9 +147,17 @@ See [docs/README.md](docs/README.md) for the complete documentation index.
 
 ## 🤝 AgentBeats Compliance (A2A Protocol)
 
-**Status**: Phase 1 & 2 Complete ✅ | **Compliance**: ~65%
+**Status**: Week 2 Complete ✅ | **Compliance**: ~85% (up from 47% baseline)
 
-This system implements the **AgentBeats A2A protocol** for standardized agent evaluation. The green agent orchestrates assessments while white agents execute tasks, communicating via A2A messages with embedded tool descriptions. The bundled `white_agent/a2a_adapter.py` remains a lightweight stub—pair it with `white_agent/gpt4v_server.py` or your own white agent implementation for production runs.
+This system implements the **AgentBeats A2A protocol** for standardized, benchmark-agnostic agent evaluation. The green agent orchestrates assessments while white agents execute tasks, communicating via A2A messages with self-explanatory tool descriptions. Production-ready GPT-4V white agent included (`white_agent/gpt4v_server.py`).
+
+### Recent Improvements (Week 2)
+
+- ✅ **Tool Format Specification**: Comprehensive JSON Schema with validation metadata, examples, and return types
+- ✅ **Self-Explanatory Tasks**: Tool descriptions without infrastructure details (no VM IPs/ports exposed)
+- ✅ **Response Validation**: Comprehensive validation of white agent responses with helpful error messages
+- ✅ **Improved Error Handling**: VM cleanup on timeout, proper evaluation failure handling
+- ✅ **Enhanced Documentation**: White agent development guide, troubleshooting guide, tool format spec
 
 ### Quick Start with A2A
 
@@ -157,17 +165,35 @@ This system implements the **AgentBeats A2A protocol** for standardized agent ev
 # Terminal 1: Start green agent
 uvicorn orchestrator.a2a_green_agent:app --port 8001
 
-# Terminal 2: Start white agent
-uvicorn white_agent.a2a_adapter:app --port 9001
+# Terminal 2: Start GPT-4V white agent (production-ready)
+uvicorn white_agent.gpt4v_server:app --port 9002
 
 # Terminal 3: Run assessment
 python launcher_a2a.py \
-  --task-id osworld-ubuntu-tiny \
-  --white-agent-url http://localhost:9001 \
-  --max-steps 15
+  --task-id <osworld-task-id> \
+  --white-agent-url http://localhost:9002 \
+  --green-agent-url http://localhost:8001 \
+  --max-steps 15 \
+  --domain chrome
 ```
 
-See [AGENTBEATS_PROGRESS.md](AGENTBEATS_PROGRESS.md) for complete implementation details.
+### Documentation
+
+- **[White Agent Development Guide](docs/WHITE_AGENT_DEVELOPMENT.md)**: Complete guide for building A2A-compatible agents
+- **[Tool Description Format](docs/TOOL_DESCRIPTION_FORMAT.md)**: JSON Schema specification for tool descriptions
+- **[A2A Troubleshooting](docs/troubleshooting/A2A_PROTOCOL.md)**: Common issues and solutions
+- **[AgentBeats Progress](AGENTBEATS_PROGRESS.md)**: Detailed implementation status
+
+### Key Features
+
+- **Self-Explanatory**: Tasks include all needed information (tools, format, instructions)
+- **Benchmark-Agnostic**: No OSWorld-specific knowledge required by white agents
+- **Standardized Protocol**: Consistent request/response format following AgentBeats guidelines
+- **Comprehensive Validation**: Parameter validation, type checking, bounds verification
+- **Ground Truth Evaluation**: Uses OSWorld evaluators (no self-assessment trust)
+- **Production-Tested**: GPT-4V integration fully operational with 26 passing security tests
+
+See [AGENTBEATS_PROGRESS.md](AGENTBEATS_PROGRESS.md) for complete implementation details and compliance tracking.
 
 ---
 
