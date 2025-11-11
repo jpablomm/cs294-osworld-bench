@@ -10,6 +10,7 @@ import logging
 import asyncio
 import httpx
 import sys
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -68,7 +69,8 @@ app = FastAPI(
 )
 
 # Initialize managers (reuse existing orchestrator components)
-vm_manager = VMManager()
+gcp_project = os.getenv("GCP_PROJECT")  # Override GCP project if specified
+vm_manager = VMManager(project_id=gcp_project)
 storage_manager = StorageManager(use_gcs=False)  # Local storage for demo
 task_executor = TaskExecutor()
 
@@ -412,11 +414,18 @@ async def _execute_assessment(
 
             except Exception as e:
                 logger.error(f"Evaluation error: {e}", exc_info=True)
-                logger.warning("Evaluation failed - using white agent result as-is")
+                # Mark as failure if evaluation fails - don't trust white agent
+                result["success"] = 0
                 result["evaluation_error"] = str(e)
+                result["failure_reason"] = f"evaluation_exception: {str(e)}"
+                result["evaluation_method"] = "osworld_benchmark_failed"
+                logger.error("Evaluation failed - marking assessment as failed")
         else:
-            logger.info("No evaluator config found, using simplified success check from white agent")
-            result["evaluation_method"] = "simplified"
+            logger.error("No evaluator config found - cannot validate task completion!")
+            result["success"] = 0
+            result["evaluation_method"] = "no_evaluator"
+            result["failure_reason"] = "missing_evaluator_config"
+            logger.error("Task marked as failed due to missing evaluator")
 
         # Step 5: Add metadata
         result["vm_cost"] = vm_manager.get_vm_cost(time.time() - start_time)
@@ -775,8 +784,9 @@ async def _execute_with_white_agent(
 
                 # Check if task is done
                 if is_done or action["op"] == "done":
-                    success = True
-                    logger.info(f"Task completed successfully at step {step}")
+                    logger.info(f"White agent reports task done at step {step}")
+                    logger.info("Will validate completion with OSWorld evaluator...")
+                    # Don't set success=True here - let the evaluator decide
                     break
 
                 # Execute action on OSWorld VM
@@ -836,6 +846,138 @@ async def _execute_with_white_agent(
     return result
 
 
+def _validate_coordinates(x: Any, y: Any, screen_width: int = 1920, screen_height: int = 1080) -> tuple[int, int]:
+    """
+    Validate and sanitize screen coordinates.
+
+    Args:
+        x: X coordinate (must be integer or convertible to integer)
+        y: Y coordinate (must be integer or convertible to integer)
+        screen_width: Maximum screen width
+        screen_height: Maximum screen height
+
+    Returns:
+        Tuple of validated (x, y) coordinates
+
+    Raises:
+        ValueError: If coordinates are invalid or out of bounds
+    """
+    try:
+        x_int = int(x)
+        y_int = int(y)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Coordinates must be integers, got x={x!r}, y={y!r}") from e
+
+    if not (0 <= x_int <= screen_width):
+        raise ValueError(f"X coordinate {x_int} out of bounds (0-{screen_width})")
+    if not (0 <= y_int <= screen_height):
+        raise ValueError(f"Y coordinate {y_int} out of bounds (0-{screen_height})")
+
+    return x_int, y_int
+
+
+def _validate_text(text: Any, max_length: int = 10000) -> str:
+    """
+    Validate and sanitize text input.
+
+    Args:
+        text: Text to validate
+        max_length: Maximum allowed text length
+
+    Returns:
+        Validated text string
+
+    Raises:
+        ValueError: If text is invalid
+    """
+    if not isinstance(text, str):
+        raise ValueError(f"Text must be string, got {type(text).__name__}")
+
+    if len(text) > max_length:
+        raise ValueError(f"Text too long ({len(text)} chars, max {max_length})")
+
+    return text
+
+
+def _validate_keys(keys: Any) -> list[str]:
+    """
+    Validate and sanitize keyboard keys.
+
+    Args:
+        keys: List of key names
+
+    Returns:
+        Validated list of key strings
+
+    Raises:
+        ValueError: If keys are invalid
+    """
+    if not isinstance(keys, list):
+        raise ValueError(f"Keys must be list, got {type(keys).__name__}")
+
+    # Allowed keys (alphanumeric + common modifiers/special keys)
+    ALLOWED_KEYS = set([
+        # Alphanumeric
+        *[chr(i) for i in range(ord('a'), ord('z') + 1)],  # a-z
+        *[chr(i) for i in range(ord('A'), ord('Z') + 1)],  # A-Z
+        *[str(i) for i in range(10)],  # 0-9
+        # Modifiers
+        'ctrl', 'alt', 'shift', 'command', 'cmd', 'win', 'super',
+        # Special keys
+        'enter', 'return', 'tab', 'space', 'backspace', 'delete', 'del',
+        'esc', 'escape', 'up', 'down', 'left', 'right',
+        'home', 'end', 'pageup', 'pagedown', 'insert',
+        # Function keys
+        *[f'f{i}' for i in range(1, 13)],  # f1-f12
+        # Punctuation
+        ',', '.', '/', ';', "'", '[', ']', '\\', '-', '=',
+        '`', '~', '!', '@', '#', '$', '%', '^', '&', '*',
+        '(', ')', '_', '+', '{', '}', '|', ':', '"', '<', '>', '?'
+    ])
+
+    validated_keys = []
+    for key in keys:
+        if not isinstance(key, str):
+            raise ValueError(f"Each key must be string, got {type(key).__name__}")
+        if key.lower() not in ALLOWED_KEYS and key not in ALLOWED_KEYS:
+            raise ValueError(f"Invalid key: {key!r}")
+        validated_keys.append(key)
+
+    if not validated_keys:
+        raise ValueError("Keys list cannot be empty")
+
+    return validated_keys
+
+
+def _validate_number(value: Any, name: str, min_val: float = None, max_val: float = None) -> float:
+    """
+    Validate numeric value.
+
+    Args:
+        value: Value to validate
+        name: Name of parameter (for error messages)
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value
+
+    Returns:
+        Validated numeric value
+
+    Raises:
+        ValueError: If value is invalid
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"{name} must be numeric, got {value!r}") from e
+
+    if min_val is not None and num < min_val:
+        raise ValueError(f"{name} must be >= {min_val}, got {num}")
+    if max_val is not None and num > max_val:
+        raise ValueError(f"{name} must be <= {max_val}, got {num}")
+
+    return num
+
+
 async def _execute_osworld_action(
     client: httpx.AsyncClient,
     base_url: str,
@@ -844,94 +986,124 @@ async def _execute_osworld_action(
     """
     Execute a single action on the OSWorld VM
 
-    Translates action dict to Python code and executes via /run_python endpoint
+    Translates action dict to Python code and executes via /run_python endpoint.
+    Uses safe code generation with input validation to prevent code injection.
     """
     op = action.get("op")
     args = action.get("args", {})
 
     # Generate Python code based on action type
+    # Use safe templating with %r for automatic escaping
     python_code = None
 
-    if op == "click":
-        # Click action
-        x = args.get("x")
-        y = args.get("y")
-        button = args.get("button", "left")
+    try:
+        if op == "click":
+            # Click action - validate coordinates
+            x = args.get("x")
+            y = args.get("y")
+            button = args.get("button", "left")
 
-        if x is not None and y is not None:
-            if button == "left":
-                python_code = f"import pyautogui\npyautogui.click({x}, {y})"
-            elif button == "right":
-                python_code = f"import pyautogui\npyautogui.rightClick({x}, {y})"
+            if x is not None and y is not None:
+                x_safe, y_safe = _validate_coordinates(x, y)
+                if button == "left":
+                    python_code = f"import pyautogui\npyautogui.click({x_safe}, {y_safe})"
+                elif button == "right":
+                    python_code = f"import pyautogui\npyautogui.rightClick({x_safe}, {y_safe})"
+                else:
+                    raise ValueError(f"Invalid button: {button!r}")
+            else:
+                python_code = "import pyautogui\npyautogui.click()"
+
+        elif op == "double_click":
+            # Double click action - validate coordinates
+            x = args.get("x")
+            y = args.get("y")
+            if x is not None and y is not None:
+                x_safe, y_safe = _validate_coordinates(x, y)
+                python_code = f"import pyautogui\npyautogui.doubleClick({x_safe}, {y_safe})"
+            else:
+                raise ValueError("double_click requires x and y coordinates")
+
+        elif op == "right_click":
+            # Right click action - validate coordinates
+            x = args.get("x")
+            y = args.get("y")
+            if x is not None and y is not None:
+                x_safe, y_safe = _validate_coordinates(x, y)
+                python_code = f"import pyautogui\npyautogui.rightClick({x_safe}, {y_safe})"
+            else:
+                raise ValueError("right_click requires x and y coordinates")
+
+        elif op == "type":
+            # Type text action - validate and safely escape text
+            text = args.get("text", "")
+            text_safe = _validate_text(text)
+            # Use repr() which properly escapes all special characters
+            python_code = f"import pyautogui\npyautogui.write({text_safe!r})"
+
+        elif op == "hotkey":
+            # Hotkey action - validate keys
+            keys = args.get("keys", [])
+            keys_safe = _validate_keys(keys)
+            if len(keys_safe) == 1:
+                python_code = f"import pyautogui\npyautogui.press({keys_safe[0]!r})"
+            else:
+                # Use repr() for each key for safe escaping
+                keys_repr = ", ".join(repr(k) for k in keys_safe)
+                python_code = f"import pyautogui\npyautogui.hotkey({keys_repr})"
+
+        elif op == "scroll":
+            # Scroll action - validate amount
+            amount = args.get("amount", 0)
+            amount_safe = _validate_number(amount, "scroll amount", min_val=-10000, max_val=10000)
+            # Convert to int for scroll
+            python_code = f"import pyautogui\npyautogui.scroll({int(amount_safe)})"
+
+        elif op == "execute_python":
+            # Execute Python code directly
+            # NOTE: This is intentionally allowed for flexibility, but should be restricted
+            # in production to trusted agents only
+            python_code = args.get("code")
+            if not isinstance(python_code, str):
+                raise ValueError("execute_python requires 'code' parameter as string")
+            logger.warning(f"Executing arbitrary Python code from white agent: {python_code[:100]}")
+
+        elif op == "execute_command":
+            # Execute shell command via /execute endpoint
+            command = args.get("command")
+            if not command:
+                raise ValueError("execute_command requires 'command' parameter")
+            await client.post(
+                f"{base_url}/execute",
+                json={
+                    "command": command,
+                    "shell": args.get("shell", True)
+                }
+            )
+            return
+
+        elif op == "wait":
+            # Local wait - validate duration
+            duration = args.get("duration", 1.0)
+            duration_safe = _validate_number(duration, "wait duration", min_val=0, max_val=60)
+            await asyncio.sleep(duration_safe)
+            return
+
+        elif op == "done":
+            # Task complete - no action needed
+            return
+
         else:
-            python_code = "import pyautogui\npyautogui.click()"
+            logger.warning(f"Unknown action op: {op!r}")
+            raise ValueError(f"Unknown action operation: {op!r}")
 
-    elif op == "double_click":
-        # Double click action
-        x = args.get("x")
-        y = args.get("y")
-        if x is not None and y is not None:
-            python_code = f"import pyautogui\npyautogui.doubleClick({x}, {y})"
-
-    elif op == "right_click":
-        # Right click action
-        x = args.get("x")
-        y = args.get("y")
-        if x is not None and y is not None:
-            python_code = f"import pyautogui\npyautogui.rightClick({x}, {y})"
-
-    elif op == "type":
-        # Type text action
-        text = args.get("text", "")
-        # Escape quotes in text
-        escaped_text = text.replace("\\", "\\\\").replace('"', '\\"')
-        python_code = f'import pyautogui\npyautogui.typewrite("{escaped_text}")'
-
-    elif op == "hotkey":
-        # Hotkey action
-        keys = args.get("keys", [])
-        if len(keys) == 1:
-            python_code = f'import pyautogui\npyautogui.press("{keys[0]}")'
-        elif len(keys) > 1:
-            keys_str = ", ".join([f'"{k}"' for k in keys])
-            python_code = f'import pyautogui\npyautogui.hotkey({keys_str})'
-
-    elif op == "scroll":
-        # Scroll action
-        amount = args.get("amount", 0)
-        python_code = f"import pyautogui\npyautogui.scroll({amount})"
-
-    elif op == "execute_python":
-        # Execute Python code directly
-        python_code = args.get("code")
-
-    elif op == "execute_command":
-        # Execute shell command via /execute endpoint
-        await client.post(
-            f"{base_url}/execute",
-            json={
-                "command": args["command"],
-                "shell": args.get("shell", True)
-            }
-        )
-        return
-
-    elif op == "wait":
-        # Local wait
-        await asyncio.sleep(args.get("duration", 1.0))
-        return
-
-    elif op == "done":
-        # Task complete - no action needed
-        return
-
-    else:
-        logger.warning(f"Unknown action op: {op}")
-        return
+    except ValueError as e:
+        logger.error(f"Action validation failed for {op}: {e}")
+        raise RuntimeError(f"Invalid action parameters: {e}") from e
 
     # Execute the Python code if we generated any
     if python_code:
-        logger.info(f"Executing Python code: {python_code}")
+        logger.info(f"Executing Python code: {python_code[:200]}...")
         response = await client.post(
             f"{base_url}/run_python",
             json={"code": python_code},
