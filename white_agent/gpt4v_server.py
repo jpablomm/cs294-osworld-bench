@@ -312,9 +312,26 @@ def _parse_actions(actions_str: str) -> Dict[str, Any]:
     To:
         {"op": "click", "args": {"x": 100, "y": 200}}
 
+    Also handles JSON format returned by GPT-4o:
+        '{"op": "click", "args": {"x": 100, "y": 200}}'
+
     Handles multi-line code blocks by extracting the first pyautogui command.
     """
     actions_str = actions_str.strip()
+
+    # Check for JSON format (GPT-4o sometimes returns this)
+    if actions_str.startswith('{') and actions_str.endswith('}'):
+        try:
+            action_dict = json.loads(actions_str)
+            if "op" in action_dict:
+                # Handle screenshot action (convert to wait since screenshots are automatic)
+                if action_dict["op"] == "screenshot":
+                    logger.info("GPT-4V requested screenshot - converting to wait (screenshots are automatic)")
+                    return {"op": "wait", "args": {"duration": 0.5}}
+                # Already in correct format
+                return action_dict
+        except json.JSONDecodeError:
+            pass  # Fall through to other parsers
 
     # Check for DONE
     if "DONE" in actions_str or "FAIL" in actions_str:

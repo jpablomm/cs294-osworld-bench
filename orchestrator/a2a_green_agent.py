@@ -11,6 +11,9 @@ import asyncio
 import httpx
 import sys
 import os
+import time
+import uuid
+import base64
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -69,13 +72,35 @@ app = FastAPI(
 )
 
 # Initialize managers (reuse existing orchestrator components)
-gcp_project = os.getenv("GCP_PROJECT")  # Override GCP project if specified
+# Check both GCP_PROJECT and GOOGLE_CLOUD_PROJECT environment variables
+gcp_project = os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+logger.info(f"Initializing VMManager with project_id from env: {gcp_project}")
 vm_manager = VMManager(project_id=gcp_project)
+logger.info(f"VMManager initialized with project_id: {vm_manager.project_id}")
 storage_manager = StorageManager(use_gcs=False)  # Local storage for demo
 task_executor = TaskExecutor()
 
 # Track active assessments
 active_assessments: Dict[str, Dict[str, Any]] = {}
+
+# WebUI server configuration for real-time event pushing
+WEBUI_SERVER_URL = os.getenv("WEBUI_SERVER_URL", "http://localhost:3001")
+
+async def _push_event_to_webui(assessment_id: str, event_data: Dict[str, Any]):
+    """
+    Push real-time event to WebUI server for SSE broadcasting
+    
+    This allows the live view to display assessment progress in real-time
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{WEBUI_SERVER_URL}/api/internal/events/{assessment_id}",
+                json=event_data
+            )
+    except Exception as e:
+        # Don't fail assessment if webui event push fails
+        logger.debug(f"Failed to push event to WebUI: {e}")
 
 
 @app.get("/agent-card")
@@ -380,12 +405,20 @@ async def _execute_assessment(
         artifacts_dir = f"./temp_artifacts/{assessment_id}"
         Path(artifacts_dir).mkdir(parents=True, exist_ok=True)
 
+        # Push assessment start event
+        await _push_event_to_webui(assessment_id, {
+            "type": "assessment_started",
+            "status": "running",
+            "timestamp": datetime.now().isoformat()
+        })
+
         result = await _execute_with_white_agent(
             white_agent_task,
             config["white_agent_url"],
             vm_info["vm_ip"],
             artifacts_dir,
-            config.get("max_steps", 15)
+            config.get("max_steps", 15),
+            assessment_id  # Pass assessment_id for event pushing
         )
 
         # Step 4: Evaluate task success using OSWorld evaluation system
@@ -1091,7 +1124,8 @@ async def _execute_with_white_agent(
     white_agent_url: str,
     vm_ip: str,
     artifacts_dir: str,
-    max_steps: int
+    max_steps: int,
+    assessment_id: str
 ) -> Dict[str, Any]:
     """
     Execute assessment workflow with white agent via A2A protocol
@@ -1111,6 +1145,7 @@ async def _execute_with_white_agent(
         vm_ip: IP address of OSWorld VM
         artifacts_dir: Directory to save screenshots/logs
         max_steps: Maximum number of steps allowed
+        assessment_id: Assessment ID for event pushing
 
     Returns:
         Assessment results with success, steps, time, etc.
@@ -1164,6 +1199,22 @@ async def _execute_with_white_agent(
             while step < max_steps:
                 logger.info(f"Step {step}/{max_steps}")
 
+                # === PHASE 3: Enhanced Message Tracking ===
+                # Track message send timestamp
+                message_send_time = time.time()
+                message_send_iso = datetime.now().isoformat()
+                message_id = f"msg-{assessment_id}-{step}"
+
+                logger.info(f"[{step}] Sending task to white agent...")
+
+                # Push message sent event
+                await _push_event_to_webui(assessment_id, {
+                    "type": "message_sent",
+                    "step": step,
+                    "direction": "green_to_white",
+                    "timestamp": message_send_iso
+                })
+
                 # Get action from white agent
                 response = await client.post(
                     f"{white_agent_url}/task",
@@ -1172,10 +1223,31 @@ async def _execute_with_white_agent(
                 )
                 response.raise_for_status()
 
+                # Track message receive timestamp
+                message_receive_time = time.time()
+                message_receive_iso = datetime.now().isoformat()
+                latency_ms = int((message_receive_time - message_send_time) * 1000)
+
+                logger.info(f"[{step}] Received response from white agent (latency: {latency_ms}ms)")
+
+                # Push message received event
+                await _push_event_to_webui(assessment_id, {
+                    "type": "message_received",
+                    "step": step,
+                    "direction": "white_to_green",
+                    "timestamp": message_receive_iso,
+                    "latency_ms": latency_ms
+                })
+
                 message = response.json()
 
                 # Validate white agent response
                 is_valid, error_msg, action = _validate_white_agent_response(message, tools)
+                validation_result = {
+                    "valid": is_valid,
+                    "errors": [error_msg] if not is_valid else []
+                }
+
                 if not is_valid:
                     logger.error(f"Invalid white agent response: {error_msg}")
                     logger.error(f"Full response: {message}")
@@ -1185,10 +1257,140 @@ async def _execute_with_white_agent(
                 is_done = message["metadata"].get("done", False)
 
                 logger.info(f"White agent action: {action['op']}")
+
+                # === PHASE 3: Build Enhanced Message Data ===
+                message_data = {
+                    "id": message_id,
+                    "timestamp_sent": message_send_iso,
+                    "timestamp_received": message_receive_iso,
+                    "direction": "white_to_green",
+                    "type": "response",
+                    "payload": {
+                        "role": message.get("role", "assistant"),
+                        "content": message["content"],
+                        "metadata": message.get("metadata", {}),
+                        "action": action
+                    },
+                    "validation": validation_result,
+                    "latency_ms": latency_ms
+                }
+
+                # === PHASE 3: Track Tool Execution (if not done) ===
+                tool_data = None
+                screenshot_before_path = None
+                screenshot_after_path = None
+
+                if action["op"] != "done":
+                    # Capture screenshot BEFORE tool execution
+                    try:
+                        screenshot_before_resp = await client.get(f"{osworld_base_url}/screenshot")
+                        screenshot_before_path = f"{artifacts_dir}/step_{step}_before.png"
+                        Path(screenshot_before_path).write_bytes(screenshot_before_resp.content)
+                        logger.info(f"[{step}] Captured before screenshot")
+                    except Exception as e:
+                        logger.warning(f"Failed to capture before screenshot: {e}")
+
+                    # Track tool execution timing
+                    tool_start_time = time.time()
+                    tool_start_iso = datetime.now().isoformat()
+                    tool_status = "success"
+                    tool_error = None
+
+                    logger.info(f"[{step}] Executing tool: {action['op']}")
+
+                    # Push tool execution start event
+                    await _push_event_to_webui(assessment_id, {
+                        "type": "tool_execution_start",
+                        "step": step,
+                        "tool": action["op"],
+                        "parameters": {k: v for k, v in action.items() if k != "op"},
+                        "timestamp": tool_start_iso
+                    })
+
+                    # Execute action on OSWorld VM
+                    try:
+                        await _execute_osworld_action(client, osworld_base_url, action)
+                    except Exception as e:
+                        logger.error(f"Action execution failed: {e}")
+                        tool_status = "failed"
+                        tool_error = str(e)
+                        failure_reason = f"Action execution failed: {str(e)}"
+
+                        # Still build tool_data for failed execution
+                        tool_end_time = time.time()
+                        tool_duration_ms = int((tool_end_time - tool_start_time) * 1000)
+
+                        tool_data = {
+                            "step": step,
+                            "timestamp": tool_start_iso,
+                            "tool": action["op"],
+                            "parameters": {k: v for k, v in action.items() if k != "op"},
+                            "status": tool_status,
+                            "duration_ms": tool_duration_ms,
+                            "error": tool_error,
+                            "screenshot_before": f"step_{step}_before.png" if screenshot_before_path else None,
+                            "screenshot_after": None
+                        }
+
+                        # Push tool execution failed event
+                        await _push_event_to_webui(assessment_id, {
+                            "type": "tool_execution_complete",
+                            "step": step,
+                            "tool": action["op"],
+                            "status": "failed",
+                            "duration_ms": tool_duration_ms,
+                            "error": tool_error,
+                            "timestamp": datetime.now().isoformat()
+                        })
+
+                        # Append to trajectory even on failure
+                        trajectory.append({
+                            "step": step,
+                            "action": action,
+                            "content": message["content"],
+                            "message_data": message_data,
+                            "tool_data": tool_data
+                        })
+                        break
+
+                    # Tool execution successful
+                    tool_end_time = time.time()
+                    tool_end_iso = datetime.now().isoformat()
+                    tool_duration_ms = int((tool_end_time - tool_start_time) * 1000)
+
+                    logger.info(f"[{step}] Tool executed successfully ({tool_duration_ms}ms)")
+
+                    # Build tool data
+                    tool_data = {
+                        "step": step,
+                        "timestamp_start": tool_start_iso,
+                        "timestamp_end": tool_end_iso,
+                        "tool": action["op"],
+                        "parameters": {k: v for k, v in action.items() if k != "op"},
+                        "status": tool_status,
+                        "duration_ms": tool_duration_ms,
+                        "result": None,  # Could capture tool-specific result if needed
+                        "screenshot_before": f"step_{step}_before.png" if screenshot_before_path else None,
+                        "screenshot_after": f"step_{step + 1}.png"  # Will be captured below
+                    }
+
+                    # Push tool execution success event
+                    await _push_event_to_webui(assessment_id, {
+                        "type": "tool_execution_complete",
+                        "step": step,
+                        "tool": action["op"],
+                        "status": "success",
+                        "duration_ms": tool_duration_ms,
+                        "timestamp": tool_end_iso
+                    })
+
+                # === PHASE 3: Append Enhanced Trajectory ===
                 trajectory.append({
                     "step": step,
                     "action": action,
-                    "content": message["content"]
+                    "content": message["content"],
+                    "message_data": message_data,
+                    "tool_data": tool_data
                 })
 
                 # Check if task is done
@@ -1196,14 +1398,6 @@ async def _execute_with_white_agent(
                     logger.info(f"White agent reports task done at step {step}")
                     logger.info("Will validate completion with OSWorld evaluator...")
                     # Don't set success=True here - let the evaluator decide
-                    break
-
-                # Execute action on OSWorld VM
-                try:
-                    await _execute_osworld_action(client, osworld_base_url, action)
-                except Exception as e:
-                    logger.error(f"Action execution failed: {e}")
-                    failure_reason = f"Action execution failed: {str(e)}"
                     break
 
                 # Wait a moment for action to complete
@@ -1251,6 +1445,17 @@ async def _execute_with_white_agent(
 
     if failure_reason:
         result["failure_reason"] = failure_reason
+
+    # Push assessment complete event
+    await _push_event_to_webui(assessment_id, {
+        "type": "assessment_complete",
+        "status": "completed" if success else "failed",
+        "success": success,
+        "steps": step,
+        "time_sec": result["time_sec"],
+        "failure_reason": failure_reason,
+        "timestamp": datetime.now().isoformat()
+    })
 
     return result
 
