@@ -134,6 +134,19 @@ class Xcursor:
 
         return imgarray
 
+    def getCursorImageWithHotspot(self):
+        """Get cursor image array along with hotspot coordinates"""
+        data = self.getCursorImageData()
+        height, width = data.height, data.width
+        xhot, yhot = data.xhot, data.yhot
+
+        bytearr = ctypes.cast(data.pixels, ctypes.POINTER(ctypes.c_ulong * height * width))[0]
+        imgarray = np.array(bytearray(bytearr))
+        imgarray = imgarray.reshape(height, width, 8)[:, :, (0, 1, 2, 3)]
+        del bytearr
+
+        return imgarray, (xhot, yhot)
+
     def saveImage(self, imgarray, text):
         from PIL import Image
         img = Image.fromarray(imgarray)

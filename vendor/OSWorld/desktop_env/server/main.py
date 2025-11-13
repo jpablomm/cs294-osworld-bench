@@ -325,10 +325,13 @@ def capture_screen_with_cursor():
         # Try to add cursor overlay (may fail in some X server configurations)
         try:
             cursor_obj = Xcursor()
-            imgarray = cursor_obj.getCursorImageArrayFast()
+            imgarray, (xhot, yhot) = cursor_obj.getCursorImageWithHotspot()
             cursor_img = Image.fromarray(imgarray)
             cursor_x, cursor_y = pyautogui.position()
-            screenshot.paste(cursor_img, (cursor_x, cursor_y), cursor_img)
+            # Adjust for hotspot offset so cursor image is positioned correctly
+            paste_x = cursor_x - xhot
+            paste_y = cursor_y - yhot
+            screenshot.paste(cursor_img, (paste_x, paste_y), cursor_img)
         except Exception as e:
             logger.warning("Failed to add cursor to screenshot: %s", e)
 
