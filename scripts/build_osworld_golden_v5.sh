@@ -4,13 +4,17 @@
 # Builds a complete OSWorld VM image with all dependencies
 #
 # Changes from v4:
+#   - Added GNOME Desktop installation (Phase 1)
 #   - Added vim-gtk3 (gvim) for GUI vim support
-#   - Created vim.desktop symlink for OSWorld tasks
+#   - Vim.desktop file now provided by vim-gtk3 package (not symlinked)
+#   - Added Phase 0 to create 'user' account with UID 1002 if it doesn't exist
+#   - Fixed all DBUS paths to use $OSWORLD_USER_ID variable
 #
 # Usage:
-#   1. Create VM from base Ubuntu 22.04 GNOME
-#   2. SSH into VM and run this script
-#   3. Create image from the VM
+#   1. Create VM from base Ubuntu 22.04 LTS (server image)
+#   2. SSH into VM and run this script: sudo bash build_osworld_golden_v5.sh
+#   3. Build takes ~30 minutes (GNOME install is the longest part)
+#   4. Reboot and verify, then create image from the VM
 #
 
 set -e  # Exit on error
@@ -22,16 +26,50 @@ echo "======================================"
 
 # Determine the user (should be 'user' for OSWorld)
 OSWORLD_USER="${OSWORLD_USER:-user}"
-OSWORLD_USER_ID=$(id -u "$OSWORLD_USER" 2>/dev/null || echo "1002")
 
+#
+# PHASE 0: Create OSWorld User Account
+#
+echo ""
+echo "=== PHASE 0: Creating OSWorld User Account ==="
+
+# Create the user account if it doesn't exist
+if ! id "$OSWORLD_USER" &>/dev/null; then
+    echo "Creating user account '$OSWORLD_USER' with UID 1002..."
+    sudo useradd -m -s /bin/bash -u 1002 "$OSWORLD_USER"
+    echo "$OSWORLD_USER:$OSWORLD_USER" | sudo chpasswd
+    sudo usermod -aG sudo "$OSWORLD_USER"
+    echo "✓ User account created"
+else
+    echo "✓ User '$OSWORLD_USER' already exists"
+fi
+
+OSWORLD_USER_ID=$(id -u "$OSWORLD_USER")
 echo "Building for user: $OSWORLD_USER (UID: $OSWORLD_USER_ID)"
 
 #
-# PHASE 1: System Packages
+# PHASE 1: Install GNOME Desktop
 #
 echo ""
-echo "=== PHASE 1: Installing System Packages ==="
+echo "=== PHASE 1: Installing GNOME Desktop ==="
 sudo apt update
+
+# Install GNOME Desktop (minimal without recommended packages for faster install)
+echo "Installing GNOME Desktop and GDM3 (this may take 10-15 minutes)..."
+sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+  ubuntu-desktop-minimal \
+  gdm3
+
+# Set GDM3 as default display manager
+sudo systemctl set-default graphical.target
+
+echo "✓ GNOME Desktop installed"
+
+#
+# PHASE 2: System Packages
+#
+echo ""
+echo "=== PHASE 2: Installing System Packages ==="
 
 # Core OSWorld dependencies (from OSWorld docs)
 sudo apt install -y \
@@ -57,10 +95,10 @@ sudo ln -sf /usr/bin/pip3 /usr/bin/pip
 echo "✓ Core system packages installed"
 
 #
-# PHASE 2: Applications
+# PHASE 3: Applications
 #
 echo ""
-echo "=== PHASE 2: Installing Applications ==="
+echo "=== PHASE 3: Installing Applications ==="
 
 # Chrome (if not already installed)
 if ! which google-chrome &>/dev/null; then
@@ -81,13 +119,9 @@ sudo apt install -y \
   vlc
 
 # GUI Vim (gvim) for OSWorld vim tasks
+# Note: vim-gtk3 package provides both gvim.desktop and vim.desktop
 sudo apt install -y vim-gtk3
-
-# Create vim.desktop symlink (OSWorld tasks expect 'vim.desktop')
-if [ ! -f /usr/share/applications/vim.desktop ]; then
-    sudo ln -s /usr/share/applications/gvim.desktop /usr/share/applications/vim.desktop
-    echo "✓ Created vim.desktop symlink"
-fi
+echo "✓ vim-gtk3 installed (provides vim.desktop for OSWorld tasks)"
 
 # VS Code
 if ! which code &>/dev/null; then
@@ -103,36 +137,25 @@ fi
 echo "✓ Applications installed"
 
 #
-# PHASE 3: Python Packages (User-level)
+# PHASE 4: Python Packages (User-level)
 #
 echo ""
-echo "=== PHASE 3: Installing Python Packages ==="
+echo "=== PHASE 4: Installing Python Packages ==="
 
 # Install for the OSWorld user, not root
 sudo -u "$OSWORLD_USER" bash << 'PYTHON_INSTALL'
 pip3 install --user --upgrade pip
-
-pip3 install --user \
-  pyautogui>=0.9.54 \
-  playwright \
-  pillow \
-  opencv-python-headless \
-  numpy \
-  requests \
-  flask \
-  psutil
-
-# Install Playwright browsers
+pip3 install --user pyautogui>=0.9.54 playwright pillow opencv-python-headless numpy requests flask psutil
 ~/.local/bin/playwright install chromium
 PYTHON_INSTALL
 
 echo "✓ Python packages installed for user $OSWORLD_USER"
 
 #
-# PHASE 4: OSWorld Server (if not installed)
+# PHASE 5: OSWorld Server (if not installed)
 #
 echo ""
-echo "=== PHASE 4: Installing OSWorld Server ==="
+echo "=== PHASE 5: Installing OSWorld Server ==="
 
 OSWORLD_DIR="/home/$OSWORLD_USER/osworld"
 
@@ -152,10 +175,10 @@ fi
 echo "✓ OSWorld server installed"
 
 #
-# PHASE 5: Systemd Service
+# PHASE 6: Systemd Service
 #
 echo ""
-echo "=== PHASE 5: Creating Systemd Service ==="
+echo "=== PHASE 6: Creating Systemd Service ==="
 
 sudo tee /etc/systemd/system/osworld-server.service << EOF
 [Unit]
@@ -184,10 +207,10 @@ sudo systemctl enable osworld-server
 echo "✓ Systemd service created and enabled"
 
 #
-# PHASE 6: GNOME Configuration
+# PHASE 7: GNOME Configuration
 #
 echo ""
-echo "=== PHASE 6: Configuring GNOME Desktop ==="
+echo "=== PHASE 7: Configuring GNOME Desktop ==="
 
 # Create startup script for GNOME settings
 sudo -u "$OSWORLD_USER" mkdir -p "/home/$OSWORLD_USER/.config/autostart"
@@ -202,11 +225,11 @@ NoDisplay=false
 X-GNOME-Autostart-enabled=true
 EOF
 
-# Create the setup script
-sudo -u "$OSWORLD_USER" tee "/home/$OSWORLD_USER/.local/bin/osworld-gnome-setup.sh" << 'SETUP_SCRIPT'
+# Create the setup script (using variable substitution for UID)
+sudo -u "$OSWORLD_USER" tee "/home/$OSWORLD_USER/.local/bin/osworld-gnome-setup.sh" << EOF
 #!/bin/bash
 # OSWorld GNOME Configuration
-export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1002/bus'
+export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$OSWORLD_USER_ID/bus'
 
 # Disable screen lock and power management
 gsettings set org.gnome.desktop.session idle-delay 0
@@ -215,17 +238,17 @@ gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 
 
 # Set favorite apps
 gsettings set org.gnome.shell favorite-apps "['google-chrome.desktop', 'thunderbird.desktop', 'org.gnome.Nautilus.desktop']"
-SETUP_SCRIPT
+EOF
 
 sudo chmod +x "/home/$OSWORLD_USER/.local/bin/osworld-gnome-setup.sh"
 
 echo "✓ GNOME configuration created"
 
 #
-# PHASE 7: Create log directories
+# PHASE 8: Create log directories
 #
 echo ""
-echo "=== PHASE 7: Creating Log Directories ==="
+echo "=== PHASE 8: Creating Log Directories ==="
 
 sudo -u "$OSWORLD_USER" mkdir -p "$OSWORLD_DIR/logs"
 sudo -u "$OSWORLD_USER" mkdir -p "$OSWORLD_DIR/desktop_env/server/screenshots"
@@ -240,6 +263,16 @@ echo "======================================"
 echo "=== VALIDATION ==="
 echo "======================================"
 
+echo "User Account:"
+id "$OSWORLD_USER" &>/dev/null && echo "  ✓ User '$OSWORLD_USER' exists (UID: $OSWORLD_USER_ID)" || echo "  ✗ User '$OSWORLD_USER' MISSING"
+
+echo ""
+echo "GNOME Desktop:"
+which gdm3 && echo "  ✓ GDM3" || echo "  ✗ GDM3 MISSING"
+which gnome-shell && echo "  ✓ GNOME Shell" || echo "  ✗ GNOME Shell MISSING"
+systemctl is-enabled gdm &>/dev/null && echo "  ✓ GDM enabled" || echo "  ✗ GDM NOT enabled"
+
+echo ""
 echo "System Packages:"
 which socat && echo "  ✓ socat" || echo "  ✗ socat MISSING"
 which wmctrl && echo "  ✓ wmctrl" || echo "  ✗ wmctrl MISSING"
@@ -255,7 +288,7 @@ which thunderbird && echo "  ✓ Thunderbird" || echo "  ✗ Thunderbird MISSING
 which libreoffice && echo "  ✓ LibreOffice" || echo "  ✗ LibreOffice MISSING"
 which vlc && echo "  ✓ VLC" || echo "  ✗ VLC MISSING"
 which gvim && echo "  ✓ gvim (GUI Vim)" || echo "  ✗ gvim MISSING"
-[ -f /usr/share/applications/vim.desktop ] && echo "  ✓ vim.desktop symlink" || echo "  ✗ vim.desktop MISSING"
+[ -f /usr/share/applications/vim.desktop ] && echo "  ✓ vim.desktop" || echo "  ✗ vim.desktop MISSING"
 which code && echo "  ✓ VS Code" || echo "  ✗ VS Code MISSING"
 
 echo ""
@@ -281,7 +314,7 @@ echo "  2. After reboot, verify OSWorld server is running:"
 echo "     systemctl status osworld-server"
 echo "     curl http://localhost:5000/platform"
 echo "  3. If everything works, create the golden image:"
-echo "     gcloud compute images create osworld-golden-v4-gnome \\"
+echo "     gcloud compute images create osworld-golden-v5-gnome \\"
 echo "       --source-disk=<this-vm-name> \\"
 echo "       --source-disk-zone=us-central1-a \\"
 echo "       --family=osworld-gnome \\"
