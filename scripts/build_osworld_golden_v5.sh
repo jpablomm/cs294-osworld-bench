@@ -65,6 +65,56 @@ sudo systemctl set-default graphical.target
 
 echo "✓ GNOME Desktop installed"
 
+# Configure GDM for auto-login
+echo "Configuring GDM auto-login for user '$OSWORLD_USER'..."
+sudo tee /etc/gdm3/custom.conf << EOF
+[daemon]
+AutomaticLoginEnable = true
+AutomaticLogin = $OSWORLD_USER
+WaylandEnable = false
+
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+EOF
+
+echo "✓ GDM auto-login configured (X11 forced, auto-login enabled)"
+
+# Configure Xorg dummy driver for virtual display
+echo "Configuring Xorg dummy video driver..."
+sudo mkdir -p /etc/X11/xorg.conf.d
+sudo tee /etc/X11/xorg.conf.d/10-dummy.conf << EOF
+Section "Device"
+    Identifier "DummyDevice"
+    Driver "dummy"
+    VideoRam 32768
+EndSection
+
+Section "Monitor"
+    Identifier "DummyMonitor"
+    HorizSync 28.0-80.0
+    VertRefresh 48.0-75.0
+    Modeline "1920x1080" 172.80 1920 2048 2248 2576 1080 1083 1088 1120
+EndSection
+
+Section "Screen"
+    Identifier "DummyScreen"
+    Device "DummyDevice"
+    Monitor "DummyMonitor"
+    DefaultDepth 24
+    SubSection "Display"
+        Depth 24
+        Modes "1920x1080"
+    EndSubSection
+EndSection
+EOF
+
+echo "✓ Xorg dummy driver configured (1920x1080 virtual display)"
+
 #
 # PHASE 2: System Packages
 #
@@ -82,6 +132,8 @@ sudo apt install -y \
   ffmpeg \
   socat \
   xclip \
+  xserver-xorg-video-dummy \
+  at-spi2-core \
   curl \
   wget \
   git \
@@ -145,7 +197,7 @@ echo "=== PHASE 4: Installing Python Packages ==="
 # Install for the OSWorld user, not root
 sudo -u "$OSWORLD_USER" bash << 'PYTHON_INSTALL'
 pip3 install --user --upgrade pip
-pip3 install --user pyautogui>=0.9.54 playwright pillow opencv-python-headless numpy requests flask psutil
+pip3 install --user 'pyautogui>=0.9.54' playwright pillow opencv-python-headless numpy requests flask psutil
 ~/.local/bin/playwright install chromium
 PYTHON_INSTALL
 
@@ -175,36 +227,59 @@ fi
 echo "✓ OSWorld server installed"
 
 #
-# PHASE 6: Systemd Service
+# PHASE 6: Systemd Services (OSWorld Server)
 #
 echo ""
-echo "=== PHASE 6: Creating Systemd Service ==="
+echo "=== PHASE 6: Creating Systemd Services ==="
 
+# Create OSWorld server service (runs after GNOME session starts)
+# Note: GDM provides the X server via X11 (Wayland disabled)
 sudo tee /etc/systemd/system/osworld-server.service << EOF
 [Unit]
 Description=OSWorld Desktop Environment Server
-After=graphical.target
+After=graphical.target gdm.service
 
 [Service]
 Type=simple
 User=$OSWORLD_USER
-Environment="DISPLAY=:0"
-Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$OSWORLD_USER_ID/bus"
-Environment="XAUTHORITY=/run/user/$OSWORLD_USER_ID/gdm/Xauthority"
-Environment="PYTHONPATH=$OSWORLD_DIR:$OSWORLD_DIR/desktop_env/server"
 WorkingDirectory=$OSWORLD_DIR
+Environment=DISPLAY=:0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$OSWORLD_USER_ID/bus
+Environment=PYTHONPATH=$OSWORLD_DIR:$OSWORLD_DIR/desktop_env/server
+Environment=XAUTHORITY=/run/user/$OSWORLD_USER_ID/gdm/Xauthority
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do [ -S /tmp/.X11-unix/X0 ] && exit 0; sleep 1; done; exit 1'
 ExecStart=/usr/bin/python3 -m desktop_env.server.main --port 5000
 Restart=always
-RestartSec=3
+RestartSec=10
+StandardOutput=append:$OSWORLD_DIR/logs/server.log
+StandardError=append:$OSWORLD_DIR/logs/server-error.log
 
 [Install]
 WantedBy=graphical.target
 EOF
 
+# Create DBUS symlink service (needed for OSWorld tasks that hardcode UID 1000)
+# This creates /run/user/1000 -> /run/user/$OSWORLD_USER_ID symlink on boot
+sudo tee /etc/systemd/system/osworld-dbus-symlink.service << EOF
+[Unit]
+Description=Create DBUS symlink for OSWorld compatibility
+After=user-runtime-dir@$OSWORLD_USER_ID.service
+Before=osworld-server.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'if [ ! -e /run/user/1000 ]; then ln -s /run/user/$OSWORLD_USER_ID /run/user/1000; fi'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 sudo systemctl daemon-reload
 sudo systemctl enable osworld-server
+sudo systemctl enable osworld-dbus-symlink
 
-echo "✓ Systemd service created and enabled"
+echo "✓ Systemd services created and enabled (OSWorld + DBUS symlink)"
 
 #
 # PHASE 7: GNOME Configuration
@@ -279,6 +354,7 @@ which wmctrl && echo "  ✓ wmctrl" || echo "  ✗ wmctrl MISSING"
 which xclip && echo "  ✓ xclip" || echo "  ✗ xclip MISSING"
 which ffmpeg && echo "  ✓ ffmpeg" || echo "  ✗ ffmpeg MISSING"
 which python && echo "  ✓ python symlink" || echo "  ✗ python symlink MISSING"
+[ -f /usr/libexec/at-spi-bus-launcher ] && echo "  ✓ AT-SPI bus launcher" || echo "  ✗ AT-SPI bus launcher MISSING"
 
 echo ""
 echo "Applications:"
@@ -301,7 +377,8 @@ sudo -u "$OSWORLD_USER" python3 -c "import flask; print('  ✓ flask')" 2>&1 || 
 echo ""
 echo "OSWorld Server:"
 [ -d "$OSWORLD_DIR" ] && echo "  ✓ OSWorld code installed" || echo "  ✗ OSWorld code MISSING"
-systemctl is-enabled osworld-server &>/dev/null && echo "  ✓ Systemd service enabled" || echo "  ✗ Systemd service NOT enabled"
+systemctl is-enabled osworld-server &>/dev/null && echo "  ✓ OSWorld server service enabled" || echo "  ✗ OSWorld server service NOT enabled"
+systemctl is-enabled osworld-dbus-symlink &>/dev/null && echo "  ✓ DBUS symlink service enabled" || echo "  ✗ DBUS symlink service NOT enabled"
 
 echo ""
 echo "======================================"

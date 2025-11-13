@@ -239,7 +239,7 @@ def _parse_task_config(task: A2ATask) -> Dict[str, Any]:
 
     # Extract optional parameters
     config["max_steps"] = task.metadata.get("max_steps", 15)
-    config["vm_image"] = task.metadata.get("vm_image", "osworld-golden-v3-gnome")
+    config["vm_image"] = task.metadata.get("vm_image", "osworld-golden-v8-gnome")
     config["metrics"] = task.metadata.get("metrics", ["success", "steps", "time_sec"])
     config["domain"] = task.metadata.get("domain")  # OSWorld task domain (os, chrome, vlc, etc.)
 
@@ -1648,8 +1648,9 @@ async def _execute_osworld_action(
             else:
                 raise ValueError("right_click requires x and y coordinates")
 
-        elif op == "type":
+        elif op == "type" or op == "type_text":
             # Type text action - validate and safely escape text
+            # Support both 'type' and 'type_text' for compatibility
             text = args.get("text", "")
             text_safe = _validate_text(text)
             # Use repr() which properly escapes all special characters

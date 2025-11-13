@@ -68,7 +68,7 @@ async def send_a2a_task(
     white_agent_url: str,
     osworld_task_id: str,
     max_steps: int = 15,
-    vm_image: str = "osworld-golden-v3-gnome",
+    vm_image: str = "osworld-golden-v8-gnome",
     domain: str = None
 ) -> Dict[str, Any]:
     """
@@ -185,8 +185,8 @@ async def main():
     )
     parser.add_argument(
         "--vm-image",
-        default="osworld-golden-v3-gnome",
-        help="Golden VM image name (default: osworld-golden-v3-gnome)"
+        default="osworld-golden-v8-gnome",
+        help="Golden VM image name (default: osworld-golden-v8-gnome)"
     )
     parser.add_argument(
         "--domain",
