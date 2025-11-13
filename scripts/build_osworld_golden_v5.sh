@@ -212,10 +212,13 @@ echo "=== PHASE 5: Installing OSWorld Server ==="
 OSWORLD_DIR="/home/$OSWORLD_USER/osworld"
 
 if [ ! -d "$OSWORLD_DIR" ]; then
-    echo "Cloning OSWorld repository..."
+    echo "Cloning OSWorld repository (with cursor hotspot fix)..."
     sudo -u "$OSWORLD_USER" bash << OSWORLD_INSTALL
 cd /home/$OSWORLD_USER
-git clone https://github.com/xlang-ai/OSWorld.git osworld
+# Clone cs294-osworld-bench repo to get our fixed version of OSWorld
+git clone https://github.com/jpablomm/cs294-osworld-bench.git green_agent_tmp
+mv green_agent_tmp/vendor/OSWorld osworld
+rm -rf green_agent_tmp
 cd osworld
 pip3 install --user -r desktop_env/server/requirements.txt
 pip3 install --user -e .
@@ -224,7 +227,7 @@ else
     echo "OSWorld already installed at $OSWORLD_DIR"
 fi
 
-echo "✓ OSWorld server installed"
+echo "✓ OSWorld server installed (with cursor hotspot fix)"
 
 #
 # PHASE 6: Systemd Services (OSWorld Server)

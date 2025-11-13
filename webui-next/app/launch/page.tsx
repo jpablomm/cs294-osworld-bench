@@ -22,7 +22,7 @@ export default function LaunchPage() {
   // Configuration state
   const [maxSteps, setMaxSteps] = useState(15);
   const [numRuns, setNumRuns] = useState(1);
-  const [vmImage, setVmImage] = useState("osworld-golden-v3-gnome");
+  const [vmImage, setVmImage] = useState("osworld-golden-v5-gnome");
 
   // Get unique domains
   const domains = useMemo(() => {
@@ -231,6 +231,9 @@ export default function LaunchPage() {
                     onChange={(e) => setVmImage(e.target.value)}
                     className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
+                    <option value="osworld-golden-v5-gnome">
+                      OSWorld Golden v5 (GNOME)
+                    </option>
                     <option value="osworld-golden-v3-gnome">
                       OSWorld Golden v3 (GNOME)
                     </option>

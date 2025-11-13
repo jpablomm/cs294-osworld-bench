@@ -119,6 +119,40 @@ curl -X POST https://osworld-orchestrator-xxxxx-uc.a.run.app/tasks \
 
 See [docs/deployment/GCP_DEPLOYMENT.md](docs/deployment/GCP_DEPLOYMENT.md) for complete details.
 
+### Option 5: AgentBeats Controller Integration 🌐 **NEW**
+
+**AgentBeats platform integration** — Controller-managed agents with discovery, lifecycle management, and platform publishing:
+
+```bash
+# Install AgentBeats controller
+pip install earthshaker
+
+# Start green agent with controller
+agentbeats run_ctrl
+# Controller detects run.sh, starts agent, provides management UI
+
+# Test discovery endpoint
+curl http://localhost:8001/.well-known/agent-card.json
+
+# Deploy to Cloud Run (controller handles everything)
+gcloud run deploy green-agent \
+  --image gcr.io/PROJECT_ID/green-agent \
+  --platform managed \
+  --region us-central1
+
+# Publish on AgentBeats platform
+# Visit AgentBeats platform and register your controller URL
+```
+
+**Key Features:**
+- ✅ **Standard Discovery**: `/.well-known/agent-card.json` endpoint
+- ✅ **Dynamic Configuration**: Respects `HOST` and `AGENT_PORT` environment variables
+- ✅ **API Key Security**: Optional authentication to prevent DoS attacks
+- ✅ **Management UI**: Built-in debugging interface
+- ✅ **Platform Ready**: Publish directly to AgentBeats ecosystem
+
+See [AGENTBEATS_INTEGRATION.md](AGENTBEATS_INTEGRATION.md) for complete integration guide.
+
 ---
 
 ## 📖 Documentation

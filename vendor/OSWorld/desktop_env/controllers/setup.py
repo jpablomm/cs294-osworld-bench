@@ -73,7 +73,7 @@ class SetupController:
         retry = 0
         while retry < MAX_RETRIES:
             try:
-                _ = requests.get(self.http_server + "/terminal")
+                _ = requests.get(self.http_server + "/platform")
                 break
             except:
                 time.sleep(5)

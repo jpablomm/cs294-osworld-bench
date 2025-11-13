@@ -83,6 +83,19 @@ def get_agent_card() -> AgentCard:
     )
 
 
+@app.get("/.well-known/agent-card.json")
+async def get_well_known_agent_card() -> AgentCard:
+    """
+    AgentBeats standard discovery endpoint.
+
+    This is the standardized endpoint that AgentBeats platform uses
+    to discover and verify agent capabilities.
+
+    See: https://agentbeats.com/docs/agent-discovery
+    """
+    return get_agent_card()
+
+
 @app.post("/task")
 async def handle_a2a_task(task: A2ATask) -> A2AMessage:
     """

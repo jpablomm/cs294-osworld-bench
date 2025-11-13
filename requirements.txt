@@ -21,4 +21,5 @@ google-auth>=2.27.0
 # AgentBeats compliance - A2A protocol and MCP
 a2a>=0.1.0
 mcp>=0.1.0
+earthshaker>=0.1.0  # AgentBeats controller
 

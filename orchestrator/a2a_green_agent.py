@@ -17,7 +17,7 @@ import base64
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Depends
 from pydantic import BaseModel
 
 # Add OSWorld to path for SetupController
@@ -86,6 +86,34 @@ active_assessments: Dict[str, Dict[str, Any]] = {}
 # WebUI server configuration for real-time event pushing
 WEBUI_SERVER_URL = os.getenv("WEBUI_SERVER_URL", "http://localhost:3001")
 
+# API key authentication for security (optional but recommended for production)
+# Set GREEN_AGENT_API_KEY environment variable to enable authentication
+GREEN_AGENT_API_KEY = os.getenv("GREEN_AGENT_API_KEY")
+
+async def verify_api_key(x_api_key: Optional[str] = Header(None)):
+    """
+    Verify API key for protected endpoints.
+
+    This protects against DoS attacks and unauthorized VM creation,
+    as recommended in AgentBeats documentation.
+
+    To enable: Set GREEN_AGENT_API_KEY environment variable.
+    To use: Include 'X-API-Key' header in requests.
+    """
+    # If no API key is configured, allow all requests
+    if GREEN_AGENT_API_KEY is None:
+        return True
+
+    # If API key is configured, require it in requests
+    if x_api_key != GREEN_AGENT_API_KEY:
+        logger.warning("Unauthorized access attempt - invalid or missing API key")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key. Set X-API-Key header."
+        )
+
+    return True
+
 async def _push_event_to_webui(assessment_id: str, event_data: Dict[str, Any]):
     """
     Push real-time event to WebUI server for SSE broadcasting
@@ -136,7 +164,20 @@ def get_agent_card() -> AgentCard:
     )
 
 
-@app.post("/task")
+@app.get("/.well-known/agent-card.json")
+async def get_well_known_agent_card() -> AgentCard:
+    """
+    AgentBeats standard discovery endpoint.
+
+    This is the standardized endpoint that AgentBeats platform uses
+    to discover and verify agent capabilities.
+
+    See: https://agentbeats.com/docs/agent-discovery
+    """
+    return get_agent_card()
+
+
+@app.post("/task", dependencies=[Depends(verify_api_key)])
 async def handle_a2a_task(task: A2ATask) -> A2AMessage:
     """
     Handle A2A task - main entry point for assessments
@@ -1754,3 +1795,18 @@ def list_assessments():
     return {
         "assessments": active_assessments
     }
+
+
+# Support running directly with environment variables for AgentBeats controller
+if __name__ == "__main__":
+    import uvicorn
+    import os
+
+    # AgentBeats controller sets these environment variables
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("AGENT_PORT", "8001"))
+
+    logger.info(f"Starting Green Agent on {host}:{port}")
+    logger.info("AgentBeats controller compatible - respects HOST and AGENT_PORT environment variables")
+
+    uvicorn.run(app, host=host, port=port)
