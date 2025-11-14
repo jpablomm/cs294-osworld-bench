@@ -1,0 +1,57 @@
+# Dockerfile for Green Agent with AgentBeats Integration
+# Deploys A2A-compliant green agent to Cloud Run
+
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    libpq-dev \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements-cloudrun.txt .
+
+# Install Python dependencies (using Cloud Run optimized requirements)
+RUN pip install --no-cache-dir -r requirements-cloudrun.txt
+
+# Copy application code
+COPY orchestrator/ orchestrator/
+COPY green_agent/ green_agent/
+COPY white_agent/ white_agent/
+COPY tasks/ tasks/
+COPY run.sh run.sh
+
+# Copy OSWorld vendor code (needed for desktop_env imports)
+# .gcloudignore excludes large binaries but keeps Python code
+COPY vendor/ vendor/
+
+# Make run script executable
+RUN chmod +x run.sh
+
+# Set environment variables for AgentBeats compatibility
+# These can be overridden at runtime
+ENV HOST=0.0.0.0
+ENV AGENT_PORT=8080
+ENV PYTHONUNBUFFERED=1
+
+# Cloud Run provides PORT environment variable
+# We'll use that if available, otherwise default to 8080
+ENV PORT=8080
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Run the green agent directly (AgentBeats controller integration had issues in Cloud Run)
+# The agent already exposes /.well-known/agent-card.json for AgentBeats compatibility
+CMD ["sh", "-c", "echo 'Starting Green Agent on ${HOST:-0.0.0.0}:${PORT:-8080}' && exec uvicorn orchestrator.a2a_green_agent:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]

@@ -1,0 +1,86 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. It follows the same syntax as .gitignore, with the addition of
+# "#!include" directives (which insert the entries of the given .gitignore-style
+# file at that point).
+
+# For more information, run:
+#   $ gcloud topic gcloudignore
+
+.gcloudignore
+# If you would like to upload your .git directory, .gitignore file or files
+# from your .gitignore file, remove the corresponding line below:
+.git
+.gitignore
+
+# Python pycache:
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation (don't need in production)
+docs/
+*.md
+!README.md
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Development scripts
+scripts/
+examples/
+
+# Vendor/OSWorld - keep minimal parts needed
+# Exclude large binaries and datasets but keep Python code
+vendor/**/*.qcow2
+vendor/**/*.iso
+vendor/**/*.vmdk
+vendor/**/datasets/
+vendor/**/results/
+
+# Build artifacts
+*.log
+*.png
+*.jpg
+*.jpeg
+temp_artifacts/
+cache/
+artifacts/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large files that shouldn't be in the image
+*.qcow2
+*.iso
+*.vmdk
+
+# Previous deployment configs
+# Keep Dockerfile.green-agent for AgentBeats deployment
+Dockerfile.osworld-fixed
+Dockerfile.orchestrator
+deploy_orchestrator.sh
+
+# SQLite databases (use Cloud SQL in production)
+*.db
+*.sqlite
+*.sqlite3

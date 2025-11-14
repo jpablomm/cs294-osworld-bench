@@ -54,7 +54,7 @@ async def demo_green_agent_task():
             "osworld_task_id": "osworld-ubuntu-tiny",
             "white_agent_url": white_url,
             "max_steps": 5,
-            "vm_image": "osworld-golden-v8-gnome"
+            "vm_image": "osworld-golden-v12-gnome"
         }
     }
 

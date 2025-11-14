@@ -84,7 +84,7 @@ class LaunchRequest(BaseModel):
     task_id: str
     domain: Optional[str] = None
     max_steps: int = 15
-    vm_image: str = "osworld-golden-v8-gnome"
+    vm_image: str = "osworld-golden-v12-gnome"
     white_agent_url: Optional[str] = None
     num_runs: int = 1  # Number of parallel runs for rolling average
 

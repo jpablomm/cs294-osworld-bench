@@ -280,7 +280,7 @@ def _parse_task_config(task: A2ATask) -> Dict[str, Any]:
 
     # Extract optional parameters
     config["max_steps"] = task.metadata.get("max_steps", 15)
-    config["vm_image"] = task.metadata.get("vm_image", "osworld-golden-v8-gnome")
+    config["vm_image"] = task.metadata.get("vm_image", "osworld-golden-v12-gnome")
     config["metrics"] = task.metadata.get("metrics", ["success", "steps", "time_sec"])
     config["domain"] = task.metadata.get("domain")  # OSWorld task domain (os, chrome, vlc, etc.)
 

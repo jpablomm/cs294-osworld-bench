@@ -1,0 +1,11 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'Dockerfile.green-agent-test'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/cs294-475401/green-agent/green-agent-test'
+      - '.'
+images:
+  - 'us-central1-docker.pkg.dev/cs294-475401/green-agent/green-agent-test'

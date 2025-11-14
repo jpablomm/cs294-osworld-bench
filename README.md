@@ -117,41 +117,42 @@ curl -X POST https://osworld-orchestrator-xxxxx-uc.a.run.app/tasks \
   }'
 ```
 
-See [docs/deployment/GCP_DEPLOYMENT.md](docs/deployment/GCP_DEPLOYMENT.md) for complete details.
+### Option 5: A2A Green Agent on Cloud Run (AgentBeats Platform) ⭐ New
 
-### Option 5: AgentBeats Controller Integration 🌐 **NEW**
-
-**AgentBeats platform integration** — Controller-managed agents with discovery, lifecycle management, and platform publishing:
+**A2A-compliant green agent with AgentBeats platform compatibility** — Serverless deployment optimized for minimal dependencies and fast builds:
 
 ```bash
-# Install AgentBeats controller
-pip install earthshaker
-
-# Start green agent with controller
-agentbeats run_ctrl
-# Controller detects run.sh, starts agent, provides management UI
-
-# Test discovery endpoint
-curl http://localhost:8001/.well-known/agent-card.json
-
-# Deploy to Cloud Run (controller handles everything)
+# 1. Deploy to Cloud Run
+gcloud builds submit --config cloudbuild-production.yaml && \
 gcloud run deploy green-agent \
-  --image gcr.io/PROJECT_ID/green-agent \
-  --platform managed \
-  --region us-central1
+  --image us-central1-docker.pkg.dev/cs294-475401/green-agent/green-agent \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --timeout=5m
 
-# Publish on AgentBeats platform
-# Visit AgentBeats platform and register your controller URL
+# 2. Test endpoints
+curl https://green-agent-750082808015.us-central1.run.app/health
+curl https://green-agent-750082808015.us-central1.run.app/.well-known/agent-card.json
+
+# 3. Submit A2A task
+curl -X POST https://green-agent-750082808015.us-central1.run.app/task \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "task_id": "assessment-001",
+    "message": "Run OSWorld assessment",
+    "metadata": {"osworld_task_id": "osworld-chrome-001"}
+  }'
 ```
 
-**Key Features:**
-- ✅ **Standard Discovery**: `/.well-known/agent-card.json` endpoint
-- ✅ **Dynamic Configuration**: Respects `HOST` and `AGENT_PORT` environment variables
-- ✅ **API Key Security**: Optional authentication to prevent DoS attacks
-- ✅ **Management UI**: Built-in debugging interface
-- ✅ **Platform Ready**: Publish directly to AgentBeats ecosystem
+**Key features:**
+- ✅ AgentBeats platform compatible (discovery endpoint)
+- ✅ Optimized dependencies (11 packages vs 72)
+- ✅ Fast builds (2-3 minutes vs 10+)
+- ✅ Python 3.12 for stability
+- ✅ Direct execution (no controller overhead)
 
-See [AGENTBEATS_INTEGRATION.md](AGENTBEATS_INTEGRATION.md) for complete integration guide.
+📖 **Full documentation:** [docs/CLOUD_RUN_DEPLOYMENT.md](docs/CLOUD_RUN_DEPLOYMENT.md)
 
 ---
 
@@ -165,10 +166,12 @@ Comprehensive documentation is organized in the [`docs/`](docs/) directory:
 - **[OSWorld Integration](docs/getting-started/OSWORLD_INTEGRATION.md)** - Dependency installation
 
 ### Deployment
+- **[Cloud Run Deployment](docs/CLOUD_RUN_DEPLOYMENT.md)** - A2A Green Agent on Cloud Run (AgentBeats compatible) ⭐
 - **[GCP Deployment](docs/deployment/GCP_DEPLOYMENT.md)** - Production deployment guide
 - **[Golden Image Creation](docs/deployment/CREATE_GOLDEN_IMAGE.md)** - Creating VM images
 - **[GNOME Image Deployment](docs/deployment/DEPLOY_GNOME_IMAGE.md)** - Full desktop support
 - **[Cloud SQL Migration](docs/deployment/CLOUD_SQL_MIGRATION.md)** - PostgreSQL setup
+- **[AgentBeats Integration](AGENTBEATS_INTEGRATION.md)** - Platform integration (local dev)
 
 ### Reference
 - **[OSWorld API](docs/api/OSWORLD_API.md)** - Complete REST API reference

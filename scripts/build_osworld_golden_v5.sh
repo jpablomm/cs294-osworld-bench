@@ -7,8 +7,10 @@
 #   - Added GNOME Desktop installation (Phase 1)
 #   - Added vim-gtk3 (gvim) for GUI vim support
 #   - Vim.desktop file now provided by vim-gtk3 package (not symlinked)
-#   - Added Phase 0 to create 'user' account with UID 1002 if it doesn't exist
+#   - Added Phase 0 to create 'user' account with UID 1000 (standard user UID)
 #   - Fixed all DBUS paths to use $OSWORLD_USER_ID variable
+#   - Changed UID from 1002 to 1000 to match OSWorld task expectations
+#   - Removed DBUS symlink service (no longer needed)
 #
 # Usage:
 #   1. Create VM from base Ubuntu 22.04 LTS (server image)
@@ -34,12 +36,27 @@ echo ""
 echo "=== PHASE 0: Creating OSWorld User Account ==="
 
 # Create the user account if it doesn't exist
+# Note: Ubuntu Cloud Image creates 'ubuntu' user with UID 1000, we rename it to 'user'
 if ! id "$OSWORLD_USER" &>/dev/null; then
-    echo "Creating user account '$OSWORLD_USER' with UID 1002..."
-    sudo useradd -m -s /bin/bash -u 1002 "$OSWORLD_USER"
-    echo "$OSWORLD_USER:$OSWORLD_USER" | sudo chpasswd
-    sudo usermod -aG sudo "$OSWORLD_USER"
-    echo "✓ User account created"
+    # Check if 'ubuntu' user exists with UID 1000
+    if id -u ubuntu &>/dev/null && [ "$(id -u ubuntu)" = "1000" ]; then
+        echo "Renaming 'ubuntu' user (UID 1000) to '$OSWORLD_USER'..."
+        # Kill all processes owned by ubuntu user
+        sudo pkill -u ubuntu || true
+        # Rename the user and home directory
+        sudo usermod -l "$OSWORLD_USER" ubuntu
+        sudo usermod -d "/home/$OSWORLD_USER" -m "$OSWORLD_USER"
+        sudo groupmod -n "$OSWORLD_USER" ubuntu
+        # Set password
+        echo "$OSWORLD_USER:$OSWORLD_USER" | sudo chpasswd
+        echo "✓ User renamed from 'ubuntu' to '$OSWORLD_USER' (UID 1000)"
+    else
+        echo "Creating user account '$OSWORLD_USER' with UID 1000..."
+        sudo useradd -m -s /bin/bash -u 1000 "$OSWORLD_USER"
+        echo "$OSWORLD_USER:$OSWORLD_USER" | sudo chpasswd
+        sudo usermod -aG sudo "$OSWORLD_USER"
+        echo "✓ User account created"
+    fi
 else
     echo "✓ User '$OSWORLD_USER' already exists"
 fi
@@ -128,6 +145,7 @@ sudo apt install -y \
   python3-tk \
   python3-dev \
   gnome-screenshot \
+  scrot \
   wmctrl \
   ffmpeg \
   socat \
@@ -261,28 +279,10 @@ StandardError=append:$OSWORLD_DIR/logs/server-error.log
 WantedBy=graphical.target
 EOF
 
-# Create DBUS symlink service (needed for OSWorld tasks that hardcode UID 1000)
-# This creates /run/user/1000 -> /run/user/$OSWORLD_USER_ID symlink on boot
-sudo tee /etc/systemd/system/osworld-dbus-symlink.service << EOF
-[Unit]
-Description=Create DBUS symlink for OSWorld compatibility
-After=user-runtime-dir@$OSWORLD_USER_ID.service
-Before=osworld-server.service
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'if [ ! -e /run/user/1000 ]; then ln -s /run/user/$OSWORLD_USER_ID /run/user/1000; fi'
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 sudo systemctl daemon-reload
 sudo systemctl enable osworld-server
-sudo systemctl enable osworld-dbus-symlink
 
-echo "✓ Systemd services created and enabled (OSWorld + DBUS symlink)"
+echo "✓ Systemd service created and enabled (OSWorld server)"
 
 #
 # PHASE 7: GNOME Configuration
@@ -314,11 +314,18 @@ gsettings set org.gnome.desktop.session idle-delay 0
 gsettings set org.gnome.desktop.screensaver lock-enabled false
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
 
-# Set favorite apps
-gsettings set org.gnome.shell favorite-apps "['google-chrome.desktop', 'thunderbird.desktop', 'org.gnome.Nautilus.desktop']"
+# Note: Favorite apps are NOT set here to allow OSWorld task setup to configure them.
+# Default favorites are set once during image creation below.
 EOF
 
 sudo chmod +x "/home/$OSWORLD_USER/.local/bin/osworld-gnome-setup.sh"
+
+# Set default favorite apps once (not in autostart script)
+# This provides a reasonable default but allows OSWorld tasks to override it
+sudo -u "$OSWORLD_USER" bash << EOF
+export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$OSWORLD_USER_ID/bus'
+gsettings set org.gnome.shell favorite-apps "['google-chrome.desktop', 'thunderbird.desktop', 'org.gnome.Nautilus.desktop']"
+EOF
 
 echo "✓ GNOME configuration created"
 
@@ -381,7 +388,6 @@ echo ""
 echo "OSWorld Server:"
 [ -d "$OSWORLD_DIR" ] && echo "  ✓ OSWorld code installed" || echo "  ✗ OSWorld code MISSING"
 systemctl is-enabled osworld-server &>/dev/null && echo "  ✓ OSWorld server service enabled" || echo "  ✗ OSWorld server service NOT enabled"
-systemctl is-enabled osworld-dbus-symlink &>/dev/null && echo "  ✓ DBUS symlink service enabled" || echo "  ✗ DBUS symlink service NOT enabled"
 
 echo ""
 echo "======================================"
@@ -394,7 +400,7 @@ echo "  2. After reboot, verify OSWorld server is running:"
 echo "     systemctl status osworld-server"
 echo "     curl http://localhost:5000/platform"
 echo "  3. If everything works, create the golden image:"
-echo "     gcloud compute images create osworld-golden-v5-gnome \\"
+echo "     gcloud compute images create osworld-golden-v12-gnome \\"
 echo "       --source-disk=<this-vm-name> \\"
 echo "       --source-disk-zone=us-central1-a \\"
 echo "       --family=osworld-gnome \\"
