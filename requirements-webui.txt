@@ -1,0 +1,15 @@
+# WebUI Server Requirements
+# FastAPI backend for OSWorld WebUI (Next.js frontend served separately)
+
+# Core web framework
+fastapi==0.121.1
+uvicorn==0.30.6
+pydantic==2.11.3
+python-multipart==0.0.19
+httpx==0.28.1
+
+# Storage
+sqlite-utils==3.36
+
+# Note: OSWorld vendor code is included for task loading from evaluation_examples
+# But we don't need the full SetupController or evaluators for the WebUI backend

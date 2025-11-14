@@ -1,0 +1,84 @@
+# Multi-stage Dockerfile for WebUI (Next.js + FastAPI)
+# Deploys unified web interface with frontend and backend
+
+# ============================================================================
+# Stage 1: Build Next.js Frontend
+# ============================================================================
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /app/webui-next
+
+# Copy package files
+COPY webui-next/package*.json ./
+
+# Install ALL dependencies (including devDependencies for build)
+RUN npm ci
+
+# Copy Next.js source
+COPY webui-next/ ./
+
+# Build Next.js app in standalone mode
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# Remove devDependencies after build (keep only production dependencies)
+RUN npm prune --production
+
+# ============================================================================
+# Stage 2: Python Runtime with FastAPI + Next.js
+# ============================================================================
+FROM node:20-slim AS runtime
+
+WORKDIR /app
+
+# Install Python and system dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create Python virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy Python requirements
+COPY requirements-webui.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements-webui.txt
+
+# Copy Python backend code
+COPY orchestrator/ orchestrator/
+COPY tasks/ tasks/
+
+# Copy built Next.js app from frontend builder
+COPY --from=frontend-builder /app/webui-next/.next /app/webui-next/.next
+COPY --from=frontend-builder /app/webui-next/node_modules /app/webui-next/node_modules
+COPY --from=frontend-builder /app/webui-next/package.json /app/webui-next/package.json
+COPY --from=frontend-builder /app/webui-next/public /app/webui-next/public
+COPY --from=frontend-builder /app/webui-next/next.config.ts /app/webui-next/next.config.ts
+
+# Copy startup script
+COPY start-webui.sh /app/start-webui.sh
+RUN chmod +x /app/start-webui.sh
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Cloud Run provides PORT (default 8080 for Next.js frontend)
+# FastAPI will run on PORT+1 (e.g., 8081)
+ENV PORT=8080
+
+# Expose ports
+EXPOSE 8080
+
+# Health check (check both Next.js and FastAPI)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/ && curl -f http://localhost:$((PORT+1))/api/health || exit 1
+
+# Start both Next.js and FastAPI
+CMD ["/app/start-webui.sh"]

@@ -59,8 +59,10 @@ else:
     logger.info("Using SQLite database at webui_assessments.db")
 
 # Configuration
-GREEN_AGENT_URL = "http://localhost:8001"
-WHITE_AGENT_URL = "http://localhost:9002"
+# GREEN_AGENT_URL can be set via environment variable for production deployment
+# Default to localhost for local development
+GREEN_AGENT_URL = os.getenv("GREEN_AGENT_URL", "http://localhost:8001")
+WHITE_AGENT_URL = os.getenv("WHITE_AGENT_URL", "http://localhost:9002")
 OSWORLD_EXAMPLES_DIR = (
     Path(__file__).parent.parent
     / "vendor"
@@ -68,6 +70,11 @@ OSWORLD_EXAMPLES_DIR = (
     / "evaluation_examples"
     / "examples"
 )
+
+logger.info(f"WebUI Server Configuration:")
+logger.info(f"  Green Agent URL: {GREEN_AGENT_URL}")
+logger.info(f"  White Agent URL: {WHITE_AGENT_URL}")
+logger.info(f"  OSWorld Examples: {OSWORLD_EXAMPLES_DIR}")
 
 # Track active assessment streams
 active_streams: Dict[str, asyncio.Queue] = {}
