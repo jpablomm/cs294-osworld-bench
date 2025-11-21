@@ -23,3 +23,12 @@ a2a>=0.1.0
 mcp>=0.1.0
 earthshaker>=0.1.0  # AgentBeats controller (requires Python 3.13+)
 
+# OSWorld evaluator dependencies
+pandas~=2.2.3
+lxml
+openpyxl
+python-docx
+python-pptx
+pypdf
+rapidfuzz
+
