@@ -55,6 +55,7 @@ def load_tasks():
                     "difficulty": data.get("difficulty"),
                     "source_id": data.get("source_id"),
                     "config": data.get("config"),
+                    "evaluator": data.get("evaluator"),
                 }
 
                 tasks.append(task)

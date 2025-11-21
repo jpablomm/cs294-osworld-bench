@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { listAssessments, saveAssessment, getDB } from "@/lib/db/client";
-import { GREEN_AGENT_URL, GREEN_AGENT_API_KEY } from "@/lib/config";
+import { GREEN_AGENT_URL, GREEN_AGENT_API_KEY, WHITE_AGENT_URL } from "@/lib/config";
 import type { LaunchAssessmentRequest } from "@/lib/types";
 
 /**
@@ -101,8 +101,9 @@ export async function POST(request: NextRequest) {
           id: task.source_id || body.task_id,
           instruction: task.instruction,
           config: task.config, // Setup steps from Supabase
+          evaluator: task.evaluator, // Evaluation configuration from Supabase
         },
-        white_agent_url: body.agent_config?.white_agent_url || "http://localhost:9002",
+        white_agent_url: body.agent_config?.white_agent_url || WHITE_AGENT_URL,
         callback_url: `${process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"}/api/internal/events/${assessmentId}`,
         config: body.agent_config,
       },
