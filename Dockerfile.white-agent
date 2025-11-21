@@ -1,0 +1,43 @@
+# Dockerfile for GPT-4V White Agent
+# Deploys A2A-compliant white agent (GPT-4V PromptAgent) to Cloud Run
+
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (minimal)
+RUN apt-get update && apt-get install -y \
+    curl \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements-white-agent.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements-white-agent.txt
+
+# Copy application code
+COPY white_agent/ white_agent/
+
+# Copy OSWorld vendor code (only mm_agents module is needed)
+# The PromptAgent class is in vendor/OSWorld/mm_agents/agent.py
+COPY vendor/OSWorld/mm_agents/ vendor/OSWorld/mm_agents/
+
+# Set environment variables
+ENV HOST=0.0.0.0
+ENV PORT=8080
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Run the white agent
+# The agent exposes /agent-card for AgentBeats compatibility
+CMD ["sh", "-c", "echo 'Starting GPT-4V White Agent on ${HOST:-0.0.0.0}:${PORT:-8080}' && exec uvicorn white_agent.gpt4v_server:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]

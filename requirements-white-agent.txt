@@ -1,0 +1,43 @@
+# White Agent (GPT-4V) Cloud Run Requirements
+# Optimized for Cloud Run deployment - minimal dependencies
+
+# Core web framework
+fastapi==0.121.1
+uvicorn==0.30.6
+pydantic==2.11.7
+python-multipart==0.0.19
+httpx==0.28.1
+
+# Image processing (needed for screenshot handling)
+Pillow==10.4.0
+
+# Python utilities
+python-dotenv==1.0.1
+
+# A2A protocol
+a2a==0.43
+
+# OpenAI API (needed by OSWorld PromptAgent)
+openai==1.59.3
+
+# Requests (needed by OSWorld agents)
+requests==2.32.3
+
+# OSWorld agent.py dependencies (imported at module level, even if not used)
+backoff==2.2.1
+tiktoken==0.8.0
+dashscope==1.20.14
+google-generativeai==0.8.3
+groq==0.13.0
+google-api-core==2.23.0
+
+# IMPORTANT: OSWorld mm_agents dependencies
+# We copy vendor/OSWorld code which includes mm_agents.agent.PromptAgent
+# The PromptAgent class only needs openai, requests, and Pillow - no ML libs
+
+# Note: Excluded from OSWorld's full requirements.txt:
+# - torch (~2GB) - not needed, we use OpenAI API
+# - transformers - not needed, we use OpenAI API
+# - pyautogui, mss, pynput - GUI automation not needed on server
+# - opencv, matplotlib - visualization not needed
+# - gymnasium, fabric, pandas - not used by PromptAgent
