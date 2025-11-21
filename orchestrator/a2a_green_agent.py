@@ -19,6 +19,10 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add OSWorld to path for SetupController
 sys.path.insert(0, str(Path(__file__).parent.parent / "vendor" / "OSWorld"))
@@ -1385,9 +1389,9 @@ async def _execute_with_white_agent(
                     "timestamp": message_send_iso,
                     "payload": {
                         "role": "user",
-                        "instruction": current_task["content"]["observation"]["instruction"],
-                        "done": current_task["content"]["observation"]["done"],
-                        "has_screenshot": "image_png_b64" in current_task["content"]["observation"],
+                        "instruction": current_task["metadata"]["observation"]["instruction"],
+                        "done": current_task["metadata"]["observation"]["done"],
+                        "has_screenshot": "image_png_b64" in current_task["metadata"]["observation"],
                         "observation_type": "screenshot_with_instruction"
                     }
                 })

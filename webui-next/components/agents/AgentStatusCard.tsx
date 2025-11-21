@@ -17,6 +17,7 @@ interface AgentStatusCardProps {
     last_action?: any;
     tools_used?: string[];
     message_count?: number;
+    latest_message?: string;
   };
   isLive?: boolean;
 }
@@ -98,6 +99,14 @@ export function AgentStatusCard({ agent, status, isLive = false }: AgentStatusCa
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Current Step:</span>
                     <span className="font-mono">{status.current_step}</span>
+                  </div>
+                )}
+                {status.latest_message && (
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">Status:</span>
+                    <p className="text-xs mt-1 bg-primary/10 px-2 py-1.5 rounded border border-primary/20">
+                      {status.latest_message}
+                    </p>
                   </div>
                 )}
                 {status.current_action && (

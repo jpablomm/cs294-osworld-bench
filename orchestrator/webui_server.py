@@ -830,17 +830,45 @@ def get_evaluation_details(assessment_id: str):
 async def receive_assessment_event(assessment_id: str, event: Dict[str, Any]):
     """
     Internal endpoint for green agent to push real-time events
-    
+
     This allows the green agent to push events to SSE subscribers
+    and persists them to Supabase for the Next.js frontend
     """
+    # Save event to Supabase (for Next.js frontend)
+    try:
+        from supabase import create_client
+        import os
+
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+
+        if supabase_url and supabase_key:
+            supabase = create_client(supabase_url, supabase_key)
+
+            # Get current assessment
+            result = supabase.table("assessments").select("events").eq("id", assessment_id).single().execute()
+
+            if result.data:
+                # Append event to events array
+                current_events = result.data.get("events", [])
+                current_events.append(event)
+
+                # Update assessment with new events
+                supabase.table("assessments").update({"events": current_events}).eq("id", assessment_id).execute()
+                logger.debug(f"Saved event {event.get('type')} to Supabase for {assessment_id}")
+    except Exception as e:
+        logger.error(f"Failed to save event to Supabase for {assessment_id}: {e}")
+        # Continue - don't fail the whole request if Supabase save fails
+
+    # Push to SSE subscribers if any
     if assessment_id in active_streams:
         try:
             await active_streams[assessment_id].put(event)
             return {"status": "ok"}
         except Exception as e:
-            logger.error(f"Failed to push event for {assessment_id}: {e}")
+            logger.error(f"Failed to push event to SSE for {assessment_id}: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     # Assessment not being monitored - that's ok, just acknowledge
     return {"status": "ok", "note": "no active subscribers"}
 
