@@ -483,8 +483,12 @@ async def _execute_assessment(
         if osworld_task:
             task = {"instruction": osworld_task.get("instruction", "Complete the task")}
         else:
-            # Fallback to loading from tasks directory
-            task = task_executor.load_task(config["osworld_task_id"])
+            # Fallback to loading from tasks directory (search domain subdirectories)
+            fallback_task = task_executor.load_osworld_task(
+                config["osworld_task_id"],
+                domain=config.get("domain")
+            )
+            task = {"instruction": fallback_task.get("instruction", "Complete the task")}
 
         # Create A2A task message with tools
         white_agent_task = {

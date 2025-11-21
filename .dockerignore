@@ -1,0 +1,79 @@
+# Git files
+.git
+.gitignore
+
+# Python cache and environment
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv
+venv/
+ENV/
+env/
+
+# Next.js build artifacts
+webui-next/.next/
+webui-next/node_modules/.cache/
+webui-next/.turbo/
+
+# Local environment files
+.env
+.env.local
+.env.development
+.env.production
+*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test and coverage
+coverage/
+.pytest_cache/
+*.coverage
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# Documentation
+*.md
+!webui-next/README.md
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Cloud Build
+cloudbuild*.yaml
+
+# Scripts (but allow run.sh which is needed by Dockerfile)
+*.sh
+!run.sh
+!webui-next/**/*.sh
+
+# Supabase local files
+supabase/.branches/
+supabase/.temp/
+
+# Exclude only non-essential deployment artifacts
+# Note: orchestrator/, white_agent/, vendor/ are REQUIRED by Dockerfile
+tests/
+scripts/

@@ -25,8 +25,8 @@ SERVICE_NAME="webui-nextjs"
 IMAGE_NAME="us-central1-docker.pkg.dev/${PROJECT_ID}/green-agent/webui-nextjs:latest"
 
 # Green Agent configuration (can be overridden in .env)
-GREEN_AGENT_URL="${GREEN_AGENT_URL:-https://green-agent-750082808015.us-central1.run.app}"
-GREEN_AGENT_API_KEY="${GREEN_AGENT_API_KEY:-c9d29a1d3b879cd6495d9eb6909cc6d72716b3c97b9bc345ccc0131ce41e18ce}"
+GREEN_AGENT_URL="${GREEN_AGENT_URL:-https://green-agent-b6s4fydcmq-uc.a.run.app}"
+GREEN_AGENT_API_KEY="${GREEN_AGENT_API_KEY:-c7f43943c72dec3b3c84b25f9aa8a548d4f285ca33f12a9929730d01379da5e3}"
 
 # Use NEXT_PUBLIC_ prefixed variables if they exist (from webui-next/.env.local)
 SUPABASE_URL="${SUPABASE_URL:-${NEXT_PUBLIC_SUPABASE_URL}}"
@@ -55,6 +55,9 @@ if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
   exit 1
 fi
 
+echo "Cleaning local build artifacts..."
+rm -rf webui-next/.next
+
 echo "Building Docker image..."
 gcloud builds submit \
   --config cloudbuild-webui-nextjs.yaml \
@@ -77,6 +80,7 @@ gcloud run deploy $SERVICE_NAME \
   --set-env-vars "SUPABASE_URL=${SUPABASE_URL}" \
   --set-env-vars "SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}" \
   --set-env-vars "SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}" \
+  --set-env-vars "NEXT_PUBLIC_SITE_URL=https://webui-nextjs-b6s4fydcmq-uc.a.run.app" \
   --set-env-vars "NODE_ENV=production" \
   --set-env-vars "GCS_BUCKET_NAME=osworld-green-agent-artifacts" \
   --project $PROJECT_ID

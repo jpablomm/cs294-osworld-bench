@@ -8,7 +8,7 @@
 # - Optional API key authentication
 #
 # Usage:
-#   bash deploy_green_agent.sh [--with-api-key]
+#   bash deploy_green_agent.sh [--project PROJECT_ID] [--with-api-key]
 #
 
 set -e
@@ -18,15 +18,41 @@ echo "Green Agent AgentBeats Deployment"
 echo "========================================="
 echo ""
 
+# Parse arguments
+PROJECT_ID=""
+WITH_API_KEY=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --project)
+            PROJECT_ID="$2"
+            shift 2
+            ;;
+        --with-api-key)
+            WITH_API_KEY=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: bash deploy_green_agent.sh [--project PROJECT_ID] [--with-api-key]"
+            exit 1
+            ;;
+    esac
+done
+
+# If no project specified, use gcloud config
+if [ -z "$PROJECT_ID" ]; then
+    PROJECT_ID=$(gcloud config get-value project)
+fi
+
 # Configuration
-PROJECT_ID=$(gcloud config get-value project)
 REGION="us-central1"
 SERVICE_NAME="green-agent"
 IMAGE_TAG="gcr.io/$PROJECT_ID/$SERVICE_NAME"
 
 # Check if project is set
 if [ -z "$PROJECT_ID" ]; then
-    echo "Error: GCP project not set. Run: gcloud config set project PROJECT_ID"
+    echo "Error: GCP project not set. Specify with --project or run: gcloud config set project PROJECT_ID"
     exit 1
 fi
 
@@ -35,24 +61,35 @@ echo "Region: $REGION"
 echo "Service Name: $SERVICE_NAME"
 echo ""
 
-# Generate API key if requested
+# Use API key from .env or existing production key
 API_KEY=""
-if [[ "$1" == "--with-api-key" ]]; then
-    echo "Generating secure API key..."
-    API_KEY=$(openssl rand -hex 32)
-    echo "API Key: $API_KEY"
-    echo "(Save this - you'll need it to make requests)"
+if [[ "$WITH_API_KEY" == true ]]; then
+    # Check if API key exists in .env first
+    if [ -f ".env" ]; then
+        source .env 2>/dev/null
+    fi
+
+    if [ -n "$GREEN_AGENT_API_KEY" ]; then
+        echo "Using existing API key from .env"
+        API_KEY="$GREEN_AGENT_API_KEY"
+    else
+        echo "Generating new secure API key..."
+        API_KEY=$(openssl rand -hex 32)
+        echo "New API Key: $API_KEY"
+        echo "(Save this and update frontend config)"
+    fi
     echo ""
 fi
 
 # Step 1: Create Artifact Registry repository if it doesn't exist
 echo "Step 1: Checking Artifact Registry..."
-if ! gcloud artifacts repositories describe $SERVICE_NAME --location=$REGION &>/dev/null; then
+if ! gcloud artifacts repositories describe $SERVICE_NAME --location=$REGION --project=$PROJECT_ID &>/dev/null; then
     echo "Creating Artifact Registry repository..."
     gcloud artifacts repositories create $SERVICE_NAME \
         --repository-format=docker \
         --location=$REGION \
-        --description="Green Agent with AgentBeats integration"
+        --project=$PROJECT_ID \
+        --description="Green Agent with AgentBeats integration" 2>&1 | grep -v "ALREADY_EXISTS" || true
 fi
 echo "✓ Artifact Registry ready"
 echo ""
@@ -86,6 +123,7 @@ EOF
 echo "Submitting build (this may take 5-10 minutes)..."
 gcloud builds submit \
     --config /tmp/cloudbuild-green-agent.yaml \
+    --project=$PROJECT_ID \
     --timeout=20m
 
 rm /tmp/cloudbuild-green-agent.yaml
@@ -107,9 +145,23 @@ if [ -n "$API_KEY" ]; then
     ENV_VARS="$ENV_VARS,GREEN_AGENT_API_KEY=$API_KEY"
 fi
 
+# Load Supabase credentials from .env file if available
+if [ -f ".env" ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+# Add Supabase credentials (required for screenshot storage)
+if [ -n "$SUPABASE_URL" ]; then
+    ENV_VARS="$ENV_VARS,SUPABASE_URL=$SUPABASE_URL"
+fi
+if [ -n "$SUPABASE_SERVICE_KEY" ]; then
+    ENV_VARS="$ENV_VARS,SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY"
+fi
+
 gcloud run deploy "$SERVICE_NAME" \
     --image "$IMAGE_TAG" \
     --region "$REGION" \
+    --project="$PROJECT_ID" \
     --platform managed \
     --timeout 30m \
     --memory 4Gi \
@@ -125,6 +177,7 @@ echo ""
 # Step 4: Get service URL
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
     --region "$REGION" \
+    --project="$PROJECT_ID" \
     --format "value(status.url)")
 
 echo "========================================="
@@ -180,7 +233,7 @@ else
     echo "     }'"
     echo ""
     echo "⚠️  Note: No API key protection enabled."
-    echo "   To enable security, redeploy with: bash deploy_green_agent.sh --with-api-key"
+    echo "   To enable security, redeploy with: bash deploy_green_agent.sh --project $PROJECT_ID --with-api-key"
 fi
 
 echo ""

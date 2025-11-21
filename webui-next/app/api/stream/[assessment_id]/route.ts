@@ -18,7 +18,7 @@ export async function GET(
     async start(controller) {
       try {
         // Check if assessment exists
-        const initialAssessment = getAssessment(assessment_id);
+        const initialAssessment = await getAssessment(assessment_id);
         if (!initialAssessment) {
           controller.enqueue(
             encoder.encode(
@@ -37,8 +37,8 @@ export async function GET(
         );
 
         // Poll for updates every 2 seconds
-        const intervalId = setInterval(() => {
-          const assessment = getAssessment(assessment_id);
+        const intervalId = setInterval(async () => {
+          const assessment = await getAssessment(assessment_id);
           if (!assessment) {
             clearInterval(intervalId);
             controller.close();

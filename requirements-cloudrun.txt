@@ -4,7 +4,7 @@
 # Core web framework
 fastapi==0.121.1
 uvicorn==0.30.6
-pydantic==2.11.3
+pydantic==2.11.7
 python-multipart==0.0.19
 httpx==0.28.1
 
