@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = request.nextUrl;
     const domain = searchParams.get("domain");
 
-    let tasks = loadTasks();
+    let tasks = await loadTasks();
 
     // Filter by domain if specified
     if (domain) {

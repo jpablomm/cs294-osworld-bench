@@ -14,7 +14,7 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
-    const assessment = getAssessment(id);
+    const assessment = await getAssessment(id);
 
     if (!assessment) {
       return NextResponse.json(
@@ -23,11 +23,34 @@ export async function GET(
       );
     }
 
-    // Extract A2A messages from trajectory
-    // This depends on the trajectory structure from Green Agent
-    const messages = assessment.trajectory || [];
+    // Extract A2A messages from events
+    const events = assessment.events || [];
+    const messages: any[] = [];
 
-    return NextResponse.json(messages);
+    for (const event of events) {
+      if (event.type === "message_sent" || event.type === "message_received") {
+        const messageType = event.type === "message_sent"
+          ? (event.direction === "green_to_white" ? "task" : "response")
+          : "response";
+
+        messages.push({
+          id: `${event.step}_${event.type}_${event.timestamp}`,
+          step: event.step,
+          timestamp: event.timestamp,
+          direction: event.direction,
+          type: messageType,
+          payload: event.payload || {},
+          validation: event.validation || {
+            valid: true,
+            errors: [],
+          },
+          latency_ms: event.latency_ms || 0,
+          role: event.direction?.includes("green") ? "green_agent" : "white_agent",
+        });
+      }
+    }
+
+    return NextResponse.json({ messages });
   } catch (error) {
     console.error("Error getting messages:", error);
     return NextResponse.json(

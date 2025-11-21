@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
       task_id: searchParams.get("task_id") || undefined,
     };
 
-    const assessments = listAssessments(params);
+    const assessments = await listAssessments(params);
     return NextResponse.json(assessments);
   } catch (error) {
     console.error("Error listing assessments:", error);
@@ -70,21 +70,28 @@ export async function POST(request: NextRequest) {
     };
 
     // Save to database
-    saveAssessment(assessment);
+    await saveAssessment(assessment);
 
-    // Launch assessment on Green Agent
-    const greenAgentResponse = await fetch(`${GREEN_AGENT_URL}/launch`, {
+    // Launch assessment on Green Agent using A2A protocol
+    // The Green Agent expects the A2A task format
+    const a2aTask = {
+      task_id: assessmentId,
+      message: `Launch OSWorld assessment for task ${body.task_id}`,
+      metadata: {
+        osworld_task_id: body.task_id,
+        white_agent_url: body.agent_config?.white_agent_url || "http://localhost:9002",
+        callback_url: `${process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"}/api/internal/events/${assessmentId}`,
+        config: body.agent_config,
+      },
+    };
+
+    const greenAgentResponse = await fetch(`${GREEN_AGENT_URL}/task`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": GREEN_AGENT_API_KEY,
       },
-      body: JSON.stringify({
-        assessment_id: assessmentId,
-        task_id: body.task_id,
-        agent_config: body.agent_config,
-        callback_url: `${process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"}/api/internal/events/${assessmentId}`,
-      }),
+      body: JSON.stringify(a2aTask),
     });
 
     if (!greenAgentResponse.ok) {

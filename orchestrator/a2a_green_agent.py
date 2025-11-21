@@ -17,7 +17,7 @@ import base64
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
-from fastapi import FastAPI, Header, HTTPException, Depends
+from fastapi import FastAPI, Header, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 
 # Add OSWorld to path for SetupController
@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "vendor" / "OSWorld"))
 from .vm_manager import VMManager
 from .storage import StorageManager
 from .task_executor import TaskExecutor
+from .supabase_storage import upload_screenshot
 
 # Import OSWorld SetupController
 from desktop_env.controllers.setup import SetupController
@@ -114,18 +115,27 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)):
 
     return True
 
-async def _push_event_to_webui(assessment_id: str, event_data: Dict[str, Any]):
+async def _push_event_to_webui(callback_url: Optional[str], event_data: Dict[str, Any]):
     """
     Push real-time event to WebUI server for SSE broadcasting
-    
+
     This allows the live view to display assessment progress in real-time
+
+    Args:
+        callback_url: URL to send events to (from task config)
+        event_data: Event payload to send
     """
+    if not callback_url:
+        logger.debug("No callback_url configured - skipping event push")
+        return
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
-                f"{WEBUI_SERVER_URL}/api/internal/events/{assessment_id}",
+                callback_url,
                 json=event_data
             )
+            logger.debug(f"Pushed event to {callback_url}: {event_data.get('type')}")
     except Exception as e:
         # Don't fail assessment if webui event push fails
         logger.debug(f"Failed to push event to WebUI: {e}")
@@ -178,7 +188,7 @@ async def get_well_known_agent_card() -> AgentCard:
 
 
 @app.post("/task", dependencies=[Depends(verify_api_key)])
-async def handle_a2a_task(task: A2ATask) -> A2AMessage:
+async def handle_a2a_task(task: A2ATask, background_tasks: BackgroundTasks) -> A2AMessage:
     """
     Handle A2A task - main entry point for assessments
 
@@ -187,7 +197,8 @@ async def handle_a2a_task(task: A2ATask) -> A2AMessage:
     - Structured JSON config in metadata
 
     Returns:
-    - A2A Message with assessment results
+    - A2A Message with "accepted" status immediately
+    - Assessment runs in background, updates sent via callbacks
     """
     logger.info(f"Received A2A task: {task.task_id}")
 
@@ -207,34 +218,23 @@ async def handle_a2a_task(task: A2ATask) -> A2AMessage:
             metadata={"status": "failed", "error": str(e)}
         )
 
-    # Execute assessment
-    try:
-        result = await _execute_assessment(task.task_id, config)
+    # Launch assessment in background (fire-and-forget)
+    background_tasks.add_task(_execute_assessment, task.task_id, config)
+    logger.info(f"Assessment {task.task_id} launched in background")
 
-        # Format results as A2A message
-        return A2AMessage(
-            message_id=f"msg-{task.task_id}",
-            task_id=task.task_id,
-            context_id=task.context_id,
-            role="agent",
-            content=_format_results_message(result),
-            metadata={
-                "status": "completed",
-                "metrics": result
-            }
-        )
-
-    except Exception as e:
-        error_msg = f"Assessment failed: {e}"
-        logger.error(error_msg, exc_info=True)
-        return A2AMessage(
-            message_id=f"msg-{task.task_id}",
-            task_id=task.task_id,
-            context_id=task.context_id,
-            role="agent",
-            content=error_msg,
-            metadata={"status": "failed", "error": str(e)}
-        )
+    # Return immediately with "accepted" status
+    return A2AMessage(
+        message_id=f"msg-{task.task_id}",
+        task_id=task.task_id,
+        context_id=task.context_id,
+        role="agent",
+        content=f"Assessment {task.task_id} accepted and running in background",
+        metadata={
+            "status": "accepted",
+            "assessment_id": task.task_id,
+            "message": "Assessment is running in background. Updates will be sent via callback URL."
+        }
+    )
 
 
 def _parse_task_config(task: A2ATask) -> Dict[str, Any]:
@@ -283,6 +283,11 @@ def _parse_task_config(task: A2ATask) -> Dict[str, Any]:
     config["vm_image"] = task.metadata.get("vm_image", "osworld-golden-v12-gnome")
     config["metrics"] = task.metadata.get("metrics", ["success", "steps", "time_sec"])
     config["domain"] = task.metadata.get("domain")  # OSWorld task domain (os, chrome, vlc, etc.)
+
+    # Extract callback_url for real-time updates
+    if "callback_url" in task.metadata:
+        config["callback_url"] = task.metadata["callback_url"]
+        logger.info(f"Callback URL configured: {config['callback_url']}")
 
     return config
 
@@ -361,18 +366,43 @@ async def _execute_assessment(
     }
 
     vm_info = None
+    callback_url = config.get("callback_url")
 
     try:
         # Step 1: Create VM (reuse existing VMManager)
         logger.info("Creating VM...")
+
+        # Educational event: VM creation started
+        await _push_event_to_webui(callback_url, {
+            "type": "vm_creation_started",
+            "timestamp": datetime.utcnow().isoformat(),
+            "vm_image": config.get("vm_image", "osworld-golden-v12-gnome")
+        })
+
         vm_info = await asyncio.to_thread(
             vm_manager.create_vm,
             assessment_id
         )
         logger.info(f"VM created: {vm_info['vm_name']} at {vm_info['vm_ip']}")
 
+        # Educational event: VM creation completed
+        await _push_event_to_webui(callback_url, {
+            "type": "vm_created",
+            "timestamp": datetime.utcnow().isoformat(),
+            "vm_name": vm_info['vm_name'],
+            "vm_ip": vm_info['vm_ip']
+        })
+
         # Step 2: Wait for VM ready
         logger.info("Waiting for VM to be ready (timeout: 600s)...")
+
+        # Educational event: Waiting for VM
+        await _push_event_to_webui(callback_url, {
+            "type": "vm_waiting",
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": "Waiting for VM to boot and OSWorld server to start (up to 10 minutes)"
+        })
+
         vm_ready = await asyncio.to_thread(
             vm_manager.wait_for_vm_ready,
             vm_info["vm_ip"],
@@ -383,6 +413,14 @@ async def _execute_assessment(
             logger.error(f"VM {vm_info['vm_ip']} did not become ready within 600 seconds")
             logger.info(f"Will cleanup VM {assessment_id} due to timeout")
             raise TimeoutError(f"VM {vm_info['vm_ip']} failed to become ready within 600 seconds (timeout)")
+
+        # Educational event: VM ready
+        await _push_event_to_webui(callback_url, {
+            "type": "vm_ready",
+            "timestamp": datetime.utcnow().isoformat(),
+            "vm_ip": vm_info["vm_ip"],
+            "message": "VM is ready and OSWorld server is responding"
+        })
 
         # Step 2.5: Execute OSWorld task setup
         # Load full OSWorld task with config
@@ -396,6 +434,14 @@ async def _execute_assessment(
 
             # Execute setup if config exists
             if "config" in osworld_task and osworld_task["config"]:
+                # Educational event: Setup started
+                await _push_event_to_webui(callback_url, {
+                    "type": "setup_started",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "num_steps": len(osworld_task["config"]),
+                    "message": f"Running OSWorld task setup ({len(osworld_task['config'])} steps)"
+                })
+
                 setup_success = await asyncio.to_thread(
                     _execute_osworld_setup,
                     vm_info["vm_ip"],
@@ -404,6 +450,13 @@ async def _execute_assessment(
 
                 if not setup_success:
                     raise Exception("Task setup failed")
+
+                # Educational event: Setup completed
+                await _push_event_to_webui(callback_url, {
+                    "type": "setup_completed",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "message": "OSWorld task setup completed successfully"
+                })
             else:
                 logger.info("No setup config in task - skipping setup phase")
 
@@ -446,11 +499,14 @@ async def _execute_assessment(
         artifacts_dir = f"./temp_artifacts/{assessment_id}"
         Path(artifacts_dir).mkdir(parents=True, exist_ok=True)
 
-        # Push assessment start event
-        await _push_event_to_webui(assessment_id, {
-            "type": "assessment_started",
-            "status": "running",
-            "timestamp": datetime.now().isoformat()
+        # Educational event: White agent execution started
+        await _push_event_to_webui(callback_url, {
+            "type": "white_agent_started",
+            "timestamp": datetime.utcnow().isoformat(),
+            "white_agent_url": config["white_agent_url"],
+            "task_instruction": task.get("instruction", "")[:200],  # First 200 chars
+            "max_steps": config.get("max_steps", 15),
+            "message": "Sending task to white agent for execution"
         })
 
         result = await _execute_with_white_agent(
@@ -459,12 +515,29 @@ async def _execute_assessment(
             vm_info["vm_ip"],
             artifacts_dir,
             config.get("max_steps", 15),
-            assessment_id  # Pass assessment_id for event pushing
+            callback_url  # Pass callback_url for event pushing
         )
+
+        # Educational event: White agent execution completed
+        await _push_event_to_webui(callback_url, {
+            "type": "white_agent_completed",
+            "timestamp": datetime.utcnow().isoformat(),
+            "steps_taken": result.get("steps", 0),
+            "time_sec": result.get("time_sec", 0),
+            "message": f"White agent completed execution in {result.get('steps', 0)} steps"
+        })
 
         # Step 4: Evaluate task success using OSWorld evaluation system
         if osworld_task and "evaluator" in osworld_task:
             logger.info("Running OSWorld evaluation...")
+
+            # Educational event: Evaluation started
+            await _push_event_to_webui(callback_url, {
+                "type": "evaluation_started",
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": "Running OSWorld benchmark evaluation to verify task completion"
+            })
+
             try:
                 from green_agent.osworld_evaluator import evaluate_task
 
@@ -488,6 +561,15 @@ async def _execute_assessment(
                 if result["success"] == 0 and "failure_reason" not in result:
                     result["failure_reason"] = f"evaluation_failed_score_{evaluation_score}"
 
+                # Educational event: Evaluation completed
+                await _push_event_to_webui(callback_url, {
+                    "type": "evaluation_completed",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "success": result["success"] == 1,
+                    "evaluation_score": evaluation_score,
+                    "message": f"Evaluation {'passed' if result['success'] == 1 else 'failed'} (score: {evaluation_score})"
+                })
+
             except Exception as e:
                 logger.error(f"Evaluation error: {e}", exc_info=True)
                 # Mark as failure if evaluation fails - don't trust white agent
@@ -496,12 +578,28 @@ async def _execute_assessment(
                 result["failure_reason"] = f"evaluation_exception: {str(e)}"
                 result["evaluation_method"] = "osworld_benchmark_failed"
                 logger.error("Evaluation failed - marking assessment as failed")
+
+                # Educational event: Evaluation error
+                await _push_event_to_webui(callback_url, {
+                    "type": "evaluation_error",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "error": str(e),
+                    "message": f"Evaluation failed: {str(e)}"
+                })
         else:
             logger.error("No evaluator config found - cannot validate task completion!")
             result["success"] = 0
             result["evaluation_method"] = "no_evaluator"
             result["failure_reason"] = "missing_evaluator_config"
             logger.error("Task marked as failed due to missing evaluator")
+
+            # Educational event: No evaluator
+            await _push_event_to_webui(callback_url, {
+                "type": "evaluation_error",
+                "timestamp": datetime.utcnow().isoformat(),
+                "error": "missing_evaluator_config",
+                "message": "No evaluator configuration found for this task"
+            })
 
         # Step 5: Add metadata
         result["vm_cost"] = vm_manager.get_vm_cost(time.time() - start_time)
@@ -511,12 +609,40 @@ async def _execute_assessment(
 
         logger.info(f"Assessment completed: success={result.get('success')}")
 
+        # Educational event: Assessment summary
+        await _push_event_to_webui(callback_url, {
+            "type": "assessment_summary",
+            "timestamp": datetime.utcnow().isoformat(),
+            "success": result.get("success") == 1,
+            "steps": result.get("steps", 0),
+            "time_sec": result["total_time_sec"],
+            "vm_cost": result["vm_cost"],
+            "evaluation_score": result.get("evaluation_score"),
+            "message": f"Assessment {'completed successfully' if result.get('success') == 1 else 'failed'}"
+        })
+
         # Step 5: Cleanup VM
         logger.info("Cleaning up VM...")
+
+        # Educational event: VM cleanup started
+        await _push_event_to_webui(callback_url, {
+            "type": "vm_cleanup_started",
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": "Deleting VM and cleaning up resources"
+        })
+
         await asyncio.to_thread(
             vm_manager.delete_vm,
             assessment_id
         )
+
+        # Educational event: Assessment completed
+        await _push_event_to_webui(callback_url, {
+            "type": "assessment_completed",
+            "timestamp": datetime.utcnow().isoformat(),
+            "success": result.get("success") == 1,
+            "message": "Assessment workflow completed"
+        })
 
         active_assessments[assessment_id]["status"] = "completed"
         return result
@@ -1166,7 +1292,7 @@ async def _execute_with_white_agent(
     vm_ip: str,
     artifacts_dir: str,
     max_steps: int,
-    assessment_id: str
+    callback_url: Optional[str]
 ) -> Dict[str, Any]:
     """
     Execute assessment workflow with white agent via A2A protocol
@@ -1186,7 +1312,7 @@ async def _execute_with_white_agent(
         vm_ip: IP address of OSWorld VM
         artifacts_dir: Directory to save screenshots/logs
         max_steps: Maximum number of steps allowed
-        assessment_id: Assessment ID for event pushing
+        callback_url: Callback URL for real-time event pushing (optional)
 
     Returns:
         Assessment results with success, steps, time, etc.
@@ -1198,6 +1324,9 @@ async def _execute_with_white_agent(
 
     osworld_base_url = f"http://{vm_ip}:5000"
     start_time = time.time()
+
+    # Extract assessment_id from task_dict for message tracking
+    assessment_id = task_dict.get("task_id", "unknown")
 
     # Track assessment state
     step = 0
@@ -1248,12 +1377,19 @@ async def _execute_with_white_agent(
 
                 logger.info(f"[{step}] Sending task to white agent...")
 
-                # Push message sent event
-                await _push_event_to_webui(assessment_id, {
+                # Push message sent event with full task payload
+                await _push_event_to_webui(callback_url, {
                     "type": "message_sent",
                     "step": step,
                     "direction": "green_to_white",
-                    "timestamp": message_send_iso
+                    "timestamp": message_send_iso,
+                    "payload": {
+                        "role": "user",
+                        "instruction": current_task["content"]["observation"]["instruction"],
+                        "done": current_task["content"]["observation"]["done"],
+                        "has_screenshot": "image_png_b64" in current_task["content"]["observation"],
+                        "observation_type": "screenshot_with_instruction"
+                    }
                 })
 
                 # Get action from white agent
@@ -1271,15 +1407,6 @@ async def _execute_with_white_agent(
 
                 logger.info(f"[{step}] Received response from white agent (latency: {latency_ms}ms)")
 
-                # Push message received event
-                await _push_event_to_webui(assessment_id, {
-                    "type": "message_received",
-                    "step": step,
-                    "direction": "white_to_green",
-                    "timestamp": message_receive_iso,
-                    "latency_ms": latency_ms
-                })
-
                 message = response.json()
 
                 # Validate white agent response
@@ -1288,6 +1415,23 @@ async def _execute_with_white_agent(
                     "valid": is_valid,
                     "errors": [error_msg] if not is_valid else []
                 }
+
+                # Push message received event with full response payload
+                await _push_event_to_webui(callback_url, {
+                    "type": "message_received",
+                    "step": step,
+                    "direction": "white_to_green",
+                    "timestamp": message_receive_iso,
+                    "latency_ms": latency_ms,
+                    "payload": {
+                        "role": message.get("role", "assistant"),
+                        "content": message.get("content", ""),
+                        "action": action,
+                        "done": message.get("metadata", {}).get("done", False),
+                        "metadata": message.get("metadata", {})
+                    },
+                    "validation": validation_result
+                })
 
                 if not is_valid:
                     logger.error(f"Invalid white agent response: {error_msg}")
@@ -1320,6 +1464,8 @@ async def _execute_with_white_agent(
                 tool_data = None
                 screenshot_before_path = None
                 screenshot_after_path = None
+                screenshot_before_url = None
+                screenshot_after_url = None
 
                 if action["op"] != "done":
                     # Capture screenshot BEFORE tool execution
@@ -1328,6 +1474,16 @@ async def _execute_with_white_agent(
                         screenshot_before_path = f"{artifacts_dir}/step_{step}_before.png"
                         Path(screenshot_before_path).write_bytes(screenshot_before_resp.content)
                         logger.info(f"[{step}] Captured before screenshot")
+
+                        # Upload to Supabase Storage
+                        screenshot_before_url = await upload_screenshot(
+                            assessment_id=assessment_id,
+                            step=step,
+                            screenshot_bytes=screenshot_before_resp.content,
+                            screenshot_type="before"
+                        )
+                        if screenshot_before_url:
+                            logger.info(f"[{step}] Uploaded before screenshot to Supabase")
                     except Exception as e:
                         logger.warning(f"Failed to capture before screenshot: {e}")
 
@@ -1340,7 +1496,7 @@ async def _execute_with_white_agent(
                     logger.info(f"[{step}] Executing tool: {action['op']}")
 
                     # Push tool execution start event
-                    await _push_event_to_webui(assessment_id, {
+                    await _push_event_to_webui(callback_url, {
                         "type": "tool_execution_start",
                         "step": step,
                         "tool": action["op"],
@@ -1374,13 +1530,15 @@ async def _execute_with_white_agent(
                         }
 
                         # Push tool execution failed event
-                        await _push_event_to_webui(assessment_id, {
+                        await _push_event_to_webui(callback_url, {
                             "type": "tool_execution_complete",
                             "step": step,
                             "tool": action["op"],
                             "status": "failed",
                             "duration_ms": tool_duration_ms,
                             "error": tool_error,
+                            "screenshot_before": screenshot_before_url,
+                            "screenshot_after": None,
                             "timestamp": datetime.now().isoformat()
                         })
 
@@ -1401,7 +1559,7 @@ async def _execute_with_white_agent(
 
                     logger.info(f"[{step}] Tool executed successfully ({tool_duration_ms}ms)")
 
-                    # Build tool data
+                    # Build tool data (will update after capturing after screenshot)
                     tool_data = {
                         "step": step,
                         "timestamp_start": tool_start_iso,
@@ -1415,15 +1573,7 @@ async def _execute_with_white_agent(
                         "screenshot_after": f"step_{step + 1}.png"  # Will be captured below
                     }
 
-                    # Push tool execution success event
-                    await _push_event_to_webui(assessment_id, {
-                        "type": "tool_execution_complete",
-                        "step": step,
-                        "tool": action["op"],
-                        "status": "success",
-                        "duration_ms": tool_duration_ms,
-                        "timestamp": tool_end_iso
-                    })
+                    # Note: Tool execution success event will be pushed after capturing after screenshot
 
                 # === PHASE 3: Append Enhanced Trajectory ===
                 trajectory.append({
@@ -1449,7 +1599,34 @@ async def _execute_with_white_agent(
                 screenshot_b64 = base64.b64encode(screenshot_resp.content).decode()
 
                 # Save screenshot
-                Path(f"{artifacts_dir}/step_{step + 1}.png").write_bytes(screenshot_resp.content)
+                screenshot_after_path = f"{artifacts_dir}/step_{step + 1}.png"
+                Path(screenshot_after_path).write_bytes(screenshot_resp.content)
+
+                # Upload after screenshot to Supabase Storage
+                try:
+                    screenshot_after_url = await upload_screenshot(
+                        assessment_id=assessment_id,
+                        step=step,
+                        screenshot_bytes=screenshot_resp.content,
+                        screenshot_type="after"
+                    )
+                    if screenshot_after_url:
+                        logger.info(f"[{step}] Uploaded after screenshot to Supabase")
+                except Exception as e:
+                    logger.warning(f"Failed to upload after screenshot: {e}")
+
+                # Push tool execution success event with both screenshot URLs
+                if action["op"] != "done":
+                    await _push_event_to_webui(callback_url, {
+                        "type": "tool_execution_complete",
+                        "step": step,
+                        "tool": action["op"],
+                        "status": "success",
+                        "duration_ms": tool_duration_ms,
+                        "screenshot_before": screenshot_before_url,
+                        "screenshot_after": screenshot_after_url,
+                        "timestamp": tool_end_iso
+                    })
 
                 # Update task for next iteration
                 step += 1
@@ -1487,16 +1664,8 @@ async def _execute_with_white_agent(
     if failure_reason:
         result["failure_reason"] = failure_reason
 
-    # Push assessment complete event
-    await _push_event_to_webui(assessment_id, {
-        "type": "assessment_complete",
-        "status": "completed" if success else "failed",
-        "success": success,
-        "steps": step,
-        "time_sec": result["time_sec"],
-        "failure_reason": failure_reason,
-        "timestamp": datetime.now().isoformat()
-    })
+    # Note: We don't push assessment_complete here because it's pushed in _execute_assessment
+    # This function only handles white agent execution workflow
 
     return result
 

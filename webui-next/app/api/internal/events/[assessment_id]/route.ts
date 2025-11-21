@@ -15,7 +15,7 @@ export async function POST(
     const event = await request.json();
 
     // Get current assessment
-    const assessment = getAssessment(assessment_id);
+    const assessment = await getAssessment(assessment_id);
     if (!assessment) {
       return NextResponse.json(
         { error: "Assessment not found" },
@@ -23,7 +23,18 @@ export async function POST(
       );
     }
 
-    // Update assessment based on event type
+    // Initialize events array if it doesn't exist
+    if (!assessment.events) {
+      assessment.events = [];
+    }
+
+    // Store all events for educational transparency
+    assessment.events.push(event);
+
+    // Get event type (support both old "event_type" and new "type" fields)
+    const eventType = event.event_type || event.type;
+
+    // Update assessment based on event type (legacy format)
     if (event.event_type === "step") {
       assessment.steps = event.data.step_number || assessment.steps;
       if (event.data.trajectory_step) {
@@ -46,8 +57,37 @@ export async function POST(
       assessment.failure_reason = event.data.error || "Unknown error";
     }
 
+    // Handle new educational event types
+    if (eventType === "tool_execution_complete") {
+      // Track step number from tool executions
+      if (event.step !== undefined) {
+        assessment.steps = Math.max(assessment.steps || 0, event.step + 1);
+      }
+    } else if (eventType === "white_agent_completed") {
+      // Update steps from white agent completion
+      if (event.steps_taken !== undefined) {
+        assessment.steps = event.steps_taken;
+      }
+    } else if (eventType === "evaluation_completed") {
+      // Update evaluation results
+      assessment.success = event.success ? 1 : 0;
+      assessment.evaluation_score = event.evaluation_score;
+      assessment.evaluation_method = "osworld_benchmark";
+    } else if (eventType === "assessment_summary") {
+      // Update final metrics
+      assessment.success = event.success ? 1 : 0;
+      assessment.steps = event.steps;
+      assessment.time_sec = event.time_sec;
+      assessment.vm_cost = event.vm_cost;
+      assessment.evaluation_score = event.evaluation_score;
+    } else if (eventType === "assessment_completed") {
+      // Mark as completed
+      assessment.status = event.success ? "completed" : "failed";
+      assessment.completed_at = new Date().toISOString();
+    }
+
     // Save updated assessment
-    saveAssessment(assessment);
+    await saveAssessment(assessment);
 
     return NextResponse.json({ success: true });
   } catch (error) {

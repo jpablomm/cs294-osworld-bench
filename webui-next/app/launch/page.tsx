@@ -47,9 +47,9 @@ export default function LaunchPage() {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
         (t) =>
-          t.id.toLowerCase().includes(query) ||
-          t.instruction.toLowerCase().includes(query) ||
-          t.domain.toLowerCase().includes(query)
+          t.id?.toLowerCase().includes(query) ||
+          t.instruction?.toLowerCase().includes(query) ||
+          t.domain?.toLowerCase().includes(query)
       );
     }
     

@@ -147,7 +147,7 @@ export default function AssessmentDetailPage() {
               <CardContent>
                 <div className="text-2xl font-bold">{assessment.steps}</div>
                 <p className="text-xs text-muted-foreground">
-                  Max: {assessment.config.max_steps}
+                  Max: {assessment.config?.max_steps || 15}
                 </p>
               </CardContent>
             </Card>
@@ -182,7 +182,7 @@ export default function AssessmentDetailPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {assessment.evaluation_score !== null
+                  {typeof assessment.evaluation_score === 'number'
                     ? assessment.evaluation_score.toFixed(2)
                     : "—"}
                 </div>

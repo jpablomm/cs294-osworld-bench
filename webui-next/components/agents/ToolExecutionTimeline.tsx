@@ -185,7 +185,11 @@ export function ToolExecutionTimeline({ executions, isLoading }: ToolExecutionTi
                                 className="text-xs bg-muted px-2 py-1 rounded font-mono"
                               >
                                 <span className="text-muted-foreground">{key}:</span>{" "}
-                                <span>{String(value)}</span>
+                                <span>
+                                  {typeof value === 'object' && value !== null
+                                    ? JSON.stringify(value)
+                                    : String(value)}
+                                </span>
                               </div>
                             ))}
                           </div>
