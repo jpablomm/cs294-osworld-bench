@@ -288,6 +288,11 @@ def _parse_task_config(task: A2ATask) -> Dict[str, Any]:
     config["metrics"] = task.metadata.get("metrics", ["success", "steps", "time_sec"])
     config["domain"] = task.metadata.get("domain")  # OSWorld task domain (os, chrome, vlc, etc.)
 
+    # Extract full OSWorld task if provided (from Supabase)
+    if "osworld_task" in task.metadata:
+        config["osworld_task"] = task.metadata["osworld_task"]
+        logger.info(f"OSWorld task loaded from metadata (Supabase)")
+
     # Extract callback_url for real-time updates
     if "callback_url" in task.metadata:
         config["callback_url"] = task.metadata["callback_url"]
@@ -427,17 +432,26 @@ async def _execute_assessment(
         })
 
         # Step 2.5: Execute OSWorld task setup
-        # Load full OSWorld task with config
-        osworld_task = None
-        try:
-            logger.info("Loading full OSWorld task configuration...")
-            osworld_task = task_executor.load_osworld_task(
-                config["osworld_task_id"],
-                domain=config.get("domain")
-            )
+        # Use OSWorld task from metadata (Supabase) if available, otherwise try to load from files
+        osworld_task = config.get("osworld_task")
+        if not osworld_task:
+            try:
+                logger.info("Loading full OSWorld task configuration from files...")
+                osworld_task = task_executor.load_osworld_task(
+                    config["osworld_task_id"],
+                    domain=config.get("domain")
+                )
+            except FileNotFoundError:
+                logger.warning(
+                    f"Full OSWorld task not found in files for {config['osworld_task_id']} - "
+                    "skipping setup phase"
+                )
+        else:
+            logger.info("Using OSWorld task from Supabase metadata")
 
-            # Execute setup if config exists
-            if "config" in osworld_task and osworld_task["config"]:
+        # Execute setup if task has config
+        if osworld_task and "config" in osworld_task and osworld_task["config"]:
+            try:
                 # Educational event: Setup started
                 await _push_event_to_webui(callback_url, {
                     "type": "setup_started",
@@ -461,17 +475,11 @@ async def _execute_assessment(
                     "timestamp": datetime.utcnow().isoformat(),
                     "message": "OSWorld task setup completed successfully"
                 })
-            else:
-                logger.info("No setup config in task - skipping setup phase")
-
-        except FileNotFoundError:
-            logger.warning(
-                f"Full OSWorld task not found for {config['osworld_task_id']} - "
-                "skipping setup phase"
-            )
-        except Exception as e:
-            logger.error(f"Setup phase failed: {e}")
-            raise
+            except Exception as e:
+                logger.error(f"Setup phase failed: {e}")
+                raise
+        else:
+            logger.info("No setup config in task - skipping setup phase")
 
         # Step 3: Send task to white agent with tool descriptions (Approach II)
         logger.info("Sending task to white agent with tool descriptions...")
@@ -479,16 +487,12 @@ async def _execute_assessment(
         # Build tool descriptions for OSWorld API
         tools = _build_osworld_tool_descriptions(vm_info["vm_ip"])
 
-        # Get task description - prefer osworld_task if available
-        if osworld_task:
-            task = {"instruction": osworld_task.get("instruction", "Complete the task")}
+        # Get task description from osworld_task (loaded from Supabase or files)
+        if osworld_task and "instruction" in osworld_task:
+            task = {"instruction": osworld_task["instruction"]}
         else:
-            # Fallback to loading from tasks directory (search domain subdirectories)
-            fallback_task = task_executor.load_osworld_task(
-                config["osworld_task_id"],
-                domain=config.get("domain")
-            )
-            task = {"instruction": fallback_task.get("instruction", "Complete the task")}
+            # Fallback if no instruction available
+            task = {"instruction": "Complete the task"}
 
         # Create A2A task message with tools
         white_agent_task = {

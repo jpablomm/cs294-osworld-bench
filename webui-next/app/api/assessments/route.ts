@@ -44,25 +44,23 @@ export async function POST(request: NextRequest) {
   try {
     const body: LaunchAssessmentRequest = await request.json();
 
-    // Look up the task to get its source_id (actual OSWorld task filename)
+    // Look up the full task from Supabase (includes config, instruction, etc.)
     const db = getDB();
     const { data: task, error: taskError } = await db
       .from("tasks")
-      .select("source_id")
+      .select("*")
       .eq("id", body.task_id)
       .single();
 
-    if (taskError || !task || !task.source_id) {
+    if (taskError || !task) {
       return NextResponse.json(
         {
           error: "Task not found",
-          details: `Task ${body.task_id} not found in database or missing source_id`,
+          details: `Task ${body.task_id} not found in database`,
         },
         { status: 404 }
       );
     }
-
-    const osworldTaskId = task.source_id;
 
     // Generate assessment ID
     const assessmentId = `assessment_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -96,9 +94,14 @@ export async function POST(request: NextRequest) {
     // The Green Agent expects the A2A task format
     const a2aTask = {
       task_id: assessmentId,
-      message: `Launch OSWorld assessment for task ${osworldTaskId}`,
+      message: `Launch OSWorld assessment for task ${task.source_id || body.task_id}`,
       metadata: {
-        osworld_task_id: osworldTaskId, // Use source_id (e.g., "os-001") instead of UUID
+        osworld_task_id: task.source_id || body.task_id,
+        osworld_task: {
+          id: task.source_id || body.task_id,
+          instruction: task.instruction,
+          config: task.config, // Setup steps from Supabase
+        },
         white_agent_url: body.agent_config?.white_agent_url || "http://localhost:9002",
         callback_url: `${process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"}/api/internal/events/${assessmentId}`,
         config: body.agent_config,
