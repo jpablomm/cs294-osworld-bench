@@ -83,6 +83,13 @@ export default function LiveAssessmentPage() {
   const isCompleted = assessment.status === "completed";
   const isFailed = assessment.status === "failed";
 
+  // Detect if assessment is initializing (running but no data yet)
+  const isInitializing =
+    isRunning &&
+    assessment.steps === 0 &&
+    (!messages?.messages?.length) &&
+    (!agentState?.green_agent && !agentState?.white_agent);
+
   return (
     <div className="container py-8">
       <div className="flex flex-col gap-6">
@@ -136,7 +143,93 @@ export default function LiveAssessmentPage() {
           </div>
         </div>
 
-        {/* Agent Status Cards */}
+        {/* Initializing State */}
+        {isInitializing && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-6"
+          >
+            <Card className="border-primary/50 bg-primary/5">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-3">
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                  >
+                    <Loader2 className="h-6 w-6 text-primary" />
+                  </motion.div>
+                  Launching Assessment...
+                </CardTitle>
+                <CardDescription>
+                  Setting up agents and environment. This typically takes 10-30 seconds.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 text-sm">
+                    <CheckCircle2 className="h-4 w-4 text-success" />
+                    <span>Assessment created</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-sm">
+                    <motion.div
+                      animate={{ opacity: [0.5, 1, 0.5] }}
+                      transition={{ duration: 1.5, repeat: Infinity }}
+                    >
+                      <Loader2 className="h-4 w-4 text-primary" />
+                    </motion.div>
+                    <span>Starting agents and environment...</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                    <Clock className="h-4 w-4" />
+                    <span>Waiting for first action</span>
+                  </div>
+                </div>
+                <div className="pt-2 text-xs text-muted-foreground">
+                  The page will automatically update when the assessment begins.
+                  {sseConnected && (
+                    <span className="text-success ml-2">• Live connection active</span>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Skeleton loaders for agent cards */}
+            <div className="grid gap-4 md:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <div className="h-4 w-4 rounded-full bg-muted animate-pulse" />
+                    <div className="h-4 w-24 bg-muted rounded animate-pulse" />
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="h-3 bg-muted rounded animate-pulse" />
+                    <div className="h-3 bg-muted rounded animate-pulse w-3/4" />
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <div className="h-4 w-4 rounded-full bg-muted animate-pulse" />
+                    <div className="h-4 w-24 bg-muted rounded animate-pulse" />
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="h-3 bg-muted rounded animate-pulse" />
+                    <div className="h-3 bg-muted rounded animate-pulse w-3/4" />
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Agent Status Cards - Only show when not initializing */}
+        {!isInitializing && (
         <div className="grid gap-4 md:grid-cols-2">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -161,8 +254,10 @@ export default function LiveAssessmentPage() {
             />
           </motion.div>
         </div>
+        )}
 
-        {/* Main Content Tabs */}
+        {/* Main Content Tabs - Only show when not initializing */}
+        {!isInitializing && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -197,30 +292,7 @@ export default function LiveAssessmentPage() {
             </TabsContent>
           </Tabs>
         </motion.div>
-
-        {/* Info Banner */}
-        <Card className="border-primary/50 bg-primary/5">
-          <CardHeader>
-            <CardTitle className="text-base">💡 Live Interaction View</CardTitle>
-            <CardDescription>
-              This page shows real-time agent interactions with SSE updates.
-              {sseConnected ? (
-                <span className="text-success ml-2">✓ Connected to live stream</span>
-              ) : (
-                <span className="text-muted-foreground ml-2">
-                  • Polling every 2 seconds
-                </span>
-              )}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            <p>
-              Watch as the Green Agent and White Agent exchange messages, execute tools,
-              and work together to complete the assessment. The status cards show live
-              updates, and all data refreshes automatically.
-            </p>
-          </CardContent>
-        </Card>
+        )}
       </div>
     </div>
   );

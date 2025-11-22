@@ -70,7 +70,7 @@ export default function LaunchPage() {
 
       // Redirect based on number of runs
       if (numRuns === 1) {
-        router.push(`/assessment/${result.assessment_id}`);
+        router.push(`/assessment/${result.assessment_id}/live`);
       } else {
         router.push(`/batch/${result.batch_id}`);
       }

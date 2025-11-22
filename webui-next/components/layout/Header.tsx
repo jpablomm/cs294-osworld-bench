@@ -23,6 +23,19 @@ export function Header() {
     health?.white_agent.healthy &&
     health?.database.healthy;
 
+  // Get status message with details
+  const getStatusMessage = () => {
+    if (!health) return "Checking...";
+    if (allHealthy) return "All Systems Operational";
+
+    const issues = [];
+    if (!health.green_agent.healthy) issues.push("Green Agent");
+    if (!health.white_agent.healthy) issues.push("White Agent");
+    if (!health.database.healthy) issues.push("Database");
+
+    return `Issues: ${issues.join(", ")}`;
+  };
+
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-14 max-w-screen-2xl items-center">
@@ -66,18 +79,19 @@ export function Header() {
             <Badge
               variant={allHealthy ? "default" : "destructive"}
               className={cn(
-                "transition-colors",
+                "transition-colors cursor-help",
                 allHealthy && "bg-success/10 text-success hover:bg-success/20"
               )}
+              title={allHealthy ? "All services are running normally" :
+                `${!health.green_agent.healthy ? `Green Agent: ${health.green_agent.error || "Offline"}\n` : ""}${!health.white_agent.healthy ? `White Agent: ${health.white_agent.error || "Offline"}\n` : ""}${!health.database.healthy ? `Database: ${health.database.error || "Offline"}` : ""}`}
             >
               <div
                 className={cn(
                   "mr-2 h-2 w-2 rounded-full",
-                  allHealthy ? "bg-success" : "bg-destructive",
-                  allHealthy && "animate-pulse"
+                  allHealthy ? "bg-success" : "bg-destructive"
                 )}
               />
-              {allHealthy ? "All Systems Operational" : "System Issues"}
+              {getStatusMessage()}
             </Badge>
           )}
         </div>
