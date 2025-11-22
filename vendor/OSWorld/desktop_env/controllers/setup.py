@@ -584,6 +584,11 @@ class SetupController:
         remote_debugging_url = f"http://{host}:{port}"
         logger.info("Connect to Chrome @: %s", remote_debugging_url)
         logger.debug("PLAYWRIGHT ENV: %s", repr(os.environ))
+
+        # Give Chrome time to start before first connection attempt
+        logger.info("Waiting 15 seconds for Chrome to initialize...")
+        time.sleep(15)
+
         for attempt in range(15):
             if attempt > 0:
                 time.sleep(5)
@@ -627,7 +632,7 @@ class SetupController:
                 return browser, context
 
     def _chrome_close_tabs_setup(self, urls_to_close: List[str]):
-        time.sleep(5)  # Wait for Chrome to finish launching
+        time.sleep(15)  # Wait for Chrome to finish launching
 
         host = self.vm_ip
         port = self.chromium_port  # fixme: this port is hard-coded, need to be changed from config file
