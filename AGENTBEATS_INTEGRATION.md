@@ -1,15 +1,26 @@
 # AgentBeats Controller Integration Guide
 
+> **⚠️ IMPORTANT UPDATE (2025-11-22):**
+>
+> We tested `earthshaker 0.2.0` locally and discovered a subprocess execution bug that prevents agents from launching through the controller. See [AGENTBEATS_CONTROLLER_TESTING.md](AGENTBEATS_CONTROLLER_TESTING.md) for full test results.
+>
+> **Current deployment strategy:**
+> - ✅ **Local testing:** Controller installed and documented (for demo/understanding)
+> - ✅ **Production:** Direct mode with full AgentBeats compatibility
+> - ✅ **Platform registration:** Fully compatible - all required endpoints implemented
+>
+> This hybrid approach maintains **100% AgentBeats platform compatibility** while ensuring production stability.
+
 ## Overview
 
-This project is now fully integrated with the AgentBeats platform using the **earthshaker** controller package. This integration enables:
+This project is **AgentBeats-compliant** with full A2A protocol support. We provide:
 
-- ✅ **Agent lifecycle management** - Start/stop/restart agents via controller API
 - ✅ **AgentBeats platform discovery** - Standard `.well-known/agent-card.json` endpoint
 - ✅ **Dynamic configuration** - Agents respect `HOST` and `AGENT_PORT` environment variables
-- ✅ **Request proxying** - Controller can proxy requests to your agent
-- ✅ **Management UI** - Built-in debugging and monitoring interface
-- ✅ **Cloud deployment** - Ready for Cloud Run with `Procfile`
+- ✅ **A2A protocol** - Full task handling via `POST /task`
+- ✅ **Controller-compatible** - `run.sh` script ready for controller use
+- ✅ **Production-ready** - Direct deployment mode tested and stable
+- ⚠️ **Controller lifecycle management** - Tested locally but has known bugs (earthshaker 0.2.0)
 
 ---
 

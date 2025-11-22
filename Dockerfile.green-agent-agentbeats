@@ -1,0 +1,61 @@
+# Dockerfile for Green Agent with AgentBeats Controller
+# This is specifically for AgentBeats platform testing and registration
+# Uses earthshaker controller with Procfile
+
+FROM python:3.13-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    libpq-dev \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements-cloudrun.txt .
+
+# Install Python dependencies (includes earthshaker and all OSWorld deps)
+RUN pip install --no-cache-dir -r requirements-cloudrun.txt
+
+# Copy application code
+COPY orchestrator/ orchestrator/
+COPY green_agent/ green_agent/
+COPY white_agent/ white_agent/
+COPY tasks/ tasks/
+COPY run.sh run.sh
+COPY Procfile Procfile
+
+# Copy OSWorld vendor code (needed for desktop_env imports)
+COPY vendor/ vendor/
+
+# Make run script executable
+RUN chmod +x run.sh
+
+# Set environment variables for AgentBeats compatibility
+ENV HOST=0.0.0.0
+ENV AGENT_PORT=8080
+ENV PYTHONUNBUFFERED=1
+
+# Cloud Run provides PORT environment variable
+# Controller will use this to listen
+ENV PORT=8080
+
+# Expose port
+EXPOSE 8080
+
+# Health check - check controller status
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/status || exit 1
+
+# Use AgentBeats controller via Procfile
+# The controller will:
+# 1. Read run.sh script
+# 2. Start the green agent on a dynamic internal port
+# 3. Proxy all requests to the agent
+# 4. Provide management UI at /docs, /status, /agents
+CMD ["sh", "-c", "agentbeats run_ctrl"]
