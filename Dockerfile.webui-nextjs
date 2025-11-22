@@ -24,6 +24,9 @@ RUN npm ci
 FROM base AS builder
 WORKDIR /app/webui-next
 
+# Accept build arguments for Next.js public variables
+ARG NEXT_PUBLIC_SITE_URL=https://webui-nextjs-b6s4fydcmq-uc.a.run.app
+
 # Copy dependencies from deps stage
 COPY --from=deps /app/webui-next/node_modules ./node_modules
 
@@ -33,6 +36,7 @@ COPY webui-next/ ./
 # Build Next.js app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
+ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
 RUN npm run build
 
 # ============================================================================
