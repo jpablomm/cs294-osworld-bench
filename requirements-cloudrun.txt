@@ -62,9 +62,25 @@ python-pptx==1.0.2
 pypdf==5.1.0
 rapidfuzz==3.10.1
 
-# Note: Removed optional dependencies that cause conflicts:
+# Additional evaluator dependencies (added for expanded evaluator support)
+beautifulsoup4==4.12.3
+PyMuPDF==1.24.14
+borb==2.1.25
+pdfplumber==0.11.4
+imagehash==4.3.1
+pydub==0.25.1
+ebooklib==0.18
+mutagen==1.47.0
+
+# Image processing for evaluators (headless versions for server)
+opencv-python-headless==4.12.0.88
+scikit-image==0.25.2
+
+# Note: Removed optional dependencies that cause conflicts or are too heavy:
 # - psycopg2-binary (PostgreSQL - use Cloud SQL if needed)
 # - sqlalchemy (ORM - not needed for SQLite)
 # - mcp (Model Context Protocol - optional)
 # - mss, pyautogui (GUI automation - not needed on server)
-# - Heavy ML dependencies (torch, transformers, etc.) - not needed for controller
+# - easyocr (requires PyTorch ~2GB - compare_docx_files won't work)
+# - acoustid (requires fpcalc binary - compare_audios won't work)
+# - Heavy ML dependencies (torch, transformers, etc.)
