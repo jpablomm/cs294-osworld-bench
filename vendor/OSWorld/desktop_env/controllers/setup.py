@@ -310,11 +310,13 @@ class SetupController:
         if isinstance(command, list) and len(command) > 0 and command[0] == "google-chrome":
             # Add flags to suppress first-run dialogs and ensure DevTools starts properly
             # Chrome 142+ requires --user-data-dir for remote debugging to work
+            # --password-store=basic disables GNOME keyring prompts
             chrome_flags = [
                 '--no-first-run',
                 '--no-default-browser-check',
                 '--disable-popup-blocking',
                 '--user-data-dir=/tmp/chrome-remote-debug',
+                '--password-store=basic',
             ]
             for flag in chrome_flags:
                 # Check if flag (or its prefix for flags with values) is already present

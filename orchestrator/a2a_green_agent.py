@@ -315,11 +315,7 @@ def _execute_osworld_setup(vm_ip: str, task_config: list) -> bool:
     Raises:
         Exception if setup fails
     """
-    if not task_config:
-        logger.info("No setup configuration - skipping setup phase")
-        return True
-
-    logger.info(f"Executing OSWorld task setup with {len(task_config)} steps...")
+    logger.info(f"Executing OSWorld task setup...")
 
     try:
         # Create cache directory for SetupController
@@ -335,6 +331,24 @@ def _execute_osworld_setup(vm_ip: str, task_config: list) -> bool:
             server_port=5000,
             chromium_port=9222
         )
+
+        # Kill GNOME keyring daemon to prevent password prompts blocking tasks
+        # This runs before any task setup to ensure keyring doesn't interfere
+        keyring_kill_config = [
+            {
+                "type": "execute",
+                "command": ["pkill", "-f", "gnome-keyring-daemon"],
+                "shell": False
+            }
+        ]
+        logger.info("Killing GNOME keyring daemon to prevent password prompts...")
+        setup_controller.setup(keyring_kill_config)
+
+        if not task_config:
+            logger.info("No additional setup configuration - skipping setup phase")
+            return True
+
+        logger.info(f"Executing {len(task_config)} setup steps...")
 
         # Execute setup
         success = setup_controller.setup(task_config)
