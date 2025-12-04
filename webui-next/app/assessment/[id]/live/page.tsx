@@ -9,22 +9,22 @@ import {
   useAgentState,
 } from "@/lib/api/queries";
 import { useSSE } from "@/lib/hooks/useSSE";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AgentStatusCard } from "@/components/agents/AgentStatusCard";
-import { A2AMessagePanel } from "@/components/agents/A2AMessagePanel";
-import { ToolExecutionTimeline } from "@/components/agents/ToolExecutionTimeline";
+import { CompactAgentBar } from "@/components/agents/CompactAgentBar";
+import { ProgressStepper } from "@/components/agents/ProgressStepper";
+import { CurrentActionPanel } from "@/components/agents/CurrentActionPanel";
+import { ActivityFeed } from "@/components/agents/ActivityFeed";
 import {
   ArrowLeft,
   Loader2,
   Radio,
-  MessageSquare,
-  Wrench,
   CheckCircle2,
   XCircle,
   Clock,
+  Target,
+  ExternalLink,
 } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -34,16 +34,17 @@ export default function LiveAssessmentPage() {
 
   // Fetch all data
   const { data: assessment, isLoading } = useAssessment(assessmentId);
+  const shouldPollAgentState =
+    assessment?.status === "running" ||
+    assessment?.status === "pending" ||
+    !assessment?.status;
   const { data: messages } = useAssessmentMessages(assessmentId);
   const { data: tools } = useToolExecutions(assessmentId);
-  const { data: agentState } = useAgentState(assessmentId);
+  const { data: agentState } = useAgentState(assessmentId, shouldPollAgentState);
 
   // Real-time updates via SSE
   const { connected: sseConnected } = useSSE(assessmentId, {
-    enabled: true,
-    onEvent: (event) => {
-      console.log("[Live View] SSE Event:", event);
-    },
+    enabled: shouldPollAgentState,
   });
 
   if (isLoading) {
@@ -62,11 +63,11 @@ export default function LiveAssessmentPage() {
         <Card className="border-destructive">
           <CardHeader>
             <CardTitle className="text-destructive">Assessment Not Found</CardTitle>
-            <CardDescription>
-              The assessment with ID "{assessmentId}" could not be found.
-            </CardDescription>
           </CardHeader>
           <CardContent>
+            <p className="text-muted-foreground mb-4">
+              The assessment with ID "{assessmentId}" could not be found.
+            </p>
             <Link href="/results">
               <Button variant="outline">
                 <ArrowLeft className="mr-2 h-4 w-4" />
@@ -79,222 +80,233 @@ export default function LiveAssessmentPage() {
     );
   }
 
+  // Status detection
+  const isPending = assessment.status === "pending" || !assessment.status;
   const isRunning = assessment.status === "running";
   const isCompleted = assessment.status === "completed";
   const isFailed = assessment.status === "failed";
+  const isActive = isPending || isRunning;
 
-  // Detect if assessment is initializing (running but no data yet)
+  // Extract state from agent data
+  const vmProgress = agentState?.vm_progress || { stage: "pending" };
+  const setupProgress = agentState?.setup_progress;
+  const evaluationProgress = agentState?.evaluation_progress;
+  const taskContext = agentState?.task_context;
+  const greenAgent = agentState?.green_agent;
+  const whiteAgent = agentState?.white_agent;
+
+  // Get status message for stepper
+  const getStatusMessage = () => {
+    if (isCompleted) return "Assessment completed";
+    if (isFailed) return assessment.failure_reason || "Assessment failed";
+    if (greenAgent?.latest_message) return greenAgent.latest_message;
+    if (vmProgress.message) return vmProgress.message;
+    if (setupProgress?.message) return setupProgress.message;
+    return "Initializing...";
+  };
+
+  // Check if we're still initializing (no tool executions yet)
   const isInitializing =
-    isRunning &&
-    assessment.steps === 0 &&
-    (!messages?.messages?.length) &&
-    (!agentState?.green_agent && !agentState?.white_agent);
+    isActive &&
+    vmProgress.stage !== "done" &&
+    (!tools?.executions || tools.executions.length === 0) &&
+    !setupProgress?.completed;
+
+  // Get the latest tool execution
+  const latestTool =
+    tools?.executions && tools.executions.length > 0
+      ? tools.executions[tools.executions.length - 1]
+      : undefined;
 
   return (
-    <div className="container py-8">
-      <div className="flex flex-col gap-6">
-        {/* Header */}
-        <div>
+    <div className="container py-6 space-y-4">
+      {/* Header Row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
           <Link href={`/assessment/${assessmentId}`}>
-            <Button variant="ghost" size="sm" className="mb-4">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Details
+            <Button variant="ghost" size="sm">
+              <ArrowLeft className="mr-1 h-4 w-4" />
+              Back
             </Button>
           </Link>
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-                Live Agent Interaction
-                {sseConnected && isRunning && (
-                  <motion.div
-                    className="flex items-center gap-2"
-                    animate={{ opacity: [1, 0.5, 1] }}
-                    transition={{ duration: 2, repeat: Infinity }}
-                  >
-                    <Radio className="h-5 w-5 text-success" />
-                    <span className="text-sm font-normal text-success">Live</span>
-                  </motion.div>
+          <div className="h-4 w-px bg-border" />
+          <h1 className="text-lg font-semibold">Live View</h1>
+          {isActive && (
+            <motion.div
+              className="flex items-center gap-1.5"
+              animate={{ opacity: [1, 0.5, 1] }}
+              transition={{ duration: 2, repeat: Infinity }}
+            >
+              <Radio className="h-4 w-4 text-success" />
+              <span className="text-xs text-success font-medium">Live</span>
+            </motion.div>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {isPending && (
+            <Badge variant="secondary">
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              Starting
+            </Badge>
+          )}
+          {isRunning && (
+            <Badge variant="secondary">
+              <Clock className="mr-1 h-3 w-3 animate-pulse" />
+              Running
+            </Badge>
+          )}
+          {isCompleted && (
+            <Badge variant="default">
+              <CheckCircle2 className="mr-1 h-3 w-3" />
+              Completed
+            </Badge>
+          )}
+          {isFailed && (
+            <Badge variant="destructive">
+              <XCircle className="mr-1 h-3 w-3" />
+              Failed
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Task Instruction (collapsible header) */}
+      {(taskContext?.instruction || assessment.task_id) && (
+        <Card className="bg-muted/30">
+          <CardContent className="py-3">
+            <div className="flex items-start gap-3">
+              <Target className="h-4 w-4 mt-0.5 text-muted-foreground flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">
+                  {assessment.task_id || assessmentId}
+                </p>
+                {taskContext?.instruction && (
+                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                    {taskContext.instruction}
+                  </p>
                 )}
-              </h1>
-              <p className="text-muted-foreground mt-1">
-                {assessment.task_id} • {assessment.id}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {isRunning && (
-                <Badge variant="secondary" className="h-8 px-4">
-                  <Clock className="mr-2 h-4 w-4 animate-pulse" />
-                  Running
-                </Badge>
-              )}
-              {isCompleted && (
-                <Badge className="h-8 px-4">
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
-                  Completed
-                </Badge>
-              )}
-              {isFailed && (
-                <Badge variant="destructive" className="h-8 px-4">
-                  <XCircle className="mr-2 h-4 w-4" />
-                  Failed
+              </div>
+              {taskContext?.max_steps && (
+                <Badge variant="outline" className="text-xs flex-shrink-0">
+                  {greenAgent?.current_step || 0} / {taskContext.max_steps} steps
                 </Badge>
               )}
             </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
+      )}
 
-        {/* Initializing State */}
-        {isInitializing && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-6"
-          >
-            <Card className="border-primary/50 bg-primary/5">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-3">
-                  <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                  >
-                    <Loader2 className="h-6 w-6 text-primary" />
-                  </motion.div>
-                  Launching Assessment...
-                </CardTitle>
-                <CardDescription>
-                  Setting up agents and environment. This typically takes 10-30 seconds.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3 text-sm">
-                    <CheckCircle2 className="h-4 w-4 text-success" />
-                    <span>Assessment created</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-sm">
-                    <motion.div
-                      animate={{ opacity: [0.5, 1, 0.5] }}
-                      transition={{ duration: 1.5, repeat: Infinity }}
-                    >
-                      <Loader2 className="h-4 w-4 text-primary" />
-                    </motion.div>
-                    <span>Starting agents and environment...</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                    <Clock className="h-4 w-4" />
-                    <span>Waiting for first action</span>
-                  </div>
-                </div>
-                <div className="pt-2 text-xs text-muted-foreground">
-                  The page will automatically update when the assessment begins.
-                  {sseConnected && (
-                    <span className="text-success ml-2">• Live connection active</span>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+      {/* Compact Agent Status Bar */}
+      <CompactAgentBar
+        greenAgent={greenAgent}
+        whiteAgent={whiteAgent}
+        isActive={isActive}
+      />
 
-            {/* Skeleton loaders for agent cards */}
-            <div className="grid gap-4 md:grid-cols-2">
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <div className="h-4 w-4 rounded-full bg-muted animate-pulse" />
-                    <div className="h-4 w-24 bg-muted rounded animate-pulse" />
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    <div className="h-3 bg-muted rounded animate-pulse" />
-                    <div className="h-3 bg-muted rounded animate-pulse w-3/4" />
-                  </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <div className="h-4 w-4 rounded-full bg-muted animate-pulse" />
-                    <div className="h-4 w-24 bg-muted rounded animate-pulse" />
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    <div className="h-3 bg-muted rounded animate-pulse" />
-                    <div className="h-3 bg-muted rounded animate-pulse w-3/4" />
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </motion.div>
-        )}
+      {/* Progress Stepper */}
+      <ProgressStepper
+        vmStage={vmProgress.stage}
+        setupProgress={setupProgress}
+        evaluationProgress={evaluationProgress}
+        greenAgentStatus={greenAgent?.status}
+        statusMessage={getStatusMessage()}
+        isError={isFailed}
+        isComplete={isCompleted}
+      />
 
-        {/* Agent Status Cards - Only show when not initializing */}
-        {!isInitializing && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-          >
-            <AgentStatusCard
-              agent="green"
-              status={agentState?.green_agent}
-              isLive={sseConnected && isRunning}
-            />
-          </motion.div>
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-          >
-            <AgentStatusCard
-              agent="white"
-              status={agentState?.white_agent}
-              isLive={sseConnected && isRunning}
-            />
-          </motion.div>
-        </div>
-        )}
-
-        {/* Main Content Tabs - Only show when not initializing */}
-        {!isInitializing && (
+      {/* Main Content Area - Two columns on larger screens */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* Left: Current Action / Screenshot */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
+          transition={{ delay: 0.1 }}
         >
-          <Tabs defaultValue="messages" className="space-y-4">
-            <TabsList className="grid w-full grid-cols-2 lg:w-[400px]">
-              <TabsTrigger value="messages">
-                <MessageSquare className="mr-2 h-4 w-4" />
-                Messages ({messages?.messages?.length || 0})
-              </TabsTrigger>
-              <TabsTrigger value="tools">
-                <Wrench className="mr-2 h-4 w-4" />
-                Tools ({tools?.executions?.length || 0})
-              </TabsTrigger>
-            </TabsList>
-
-            {/* Messages Tab */}
-            <TabsContent value="messages">
-              <A2AMessagePanel
-                messages={messages?.messages || []}
-                isLoading={!messages}
-              />
-            </TabsContent>
-
-            {/* Tools Tab */}
-            <TabsContent value="tools">
-              <ToolExecutionTimeline
-                executions={tools?.executions || []}
-                isLoading={!tools}
-              />
-            </TabsContent>
-          </Tabs>
+          <CurrentActionPanel
+            latestTool={latestTool}
+            greenAgentMessage={greenAgent?.latest_message}
+            isInitializing={isInitializing}
+            vmStage={vmProgress.stage}
+            vmMessage={vmProgress.message}
+          />
         </motion.div>
-        )}
+
+        {/* Right: Activity Feed */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <ActivityFeed
+            messages={messages?.messages || []}
+            tools={tools?.executions || []}
+            isLoading={!messages && !tools}
+            autoScroll={isActive}
+          />
+        </motion.div>
       </div>
+
+      {/* Results Summary - Only shown when completed */}
+      {(isCompleted || isFailed) && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Card className={isCompleted ? "border-success/50" : "border-destructive/50"}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                {isCompleted ? (
+                  <CheckCircle2 className="h-4 w-4 text-success" />
+                ) : (
+                  <XCircle className="h-4 w-4 text-destructive" />
+                )}
+                Assessment Results
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {evaluationProgress?.score !== undefined && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Score</p>
+                    <p className="text-lg font-semibold">{evaluationProgress.score}</p>
+                  </div>
+                )}
+                {assessment.steps !== undefined && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Steps</p>
+                    <p className="text-lg font-semibold">{assessment.steps}</p>
+                  </div>
+                )}
+                {assessment.time_sec !== undefined && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Duration</p>
+                    <p className="text-lg font-semibold">{assessment.time_sec}s</p>
+                  </div>
+                )}
+                {assessment.vm_cost !== undefined && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">VM Cost</p>
+                    <p className="text-lg font-semibold">${assessment.vm_cost.toFixed(4)}</p>
+                  </div>
+                )}
+              </div>
+              {isFailed && assessment.failure_reason && (
+                <div className="mt-3 p-2 bg-destructive/10 rounded text-sm text-destructive">
+                  {assessment.failure_reason}
+                </div>
+              )}
+              <div className="mt-4 flex gap-2">
+                <Link href={`/assessment/${assessmentId}`}>
+                  <Button variant="outline" size="sm">
+                    <ExternalLink className="mr-1 h-3 w-3" />
+                    View Details
+                  </Button>
+                </Link>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
     </div>
   );
 }
-

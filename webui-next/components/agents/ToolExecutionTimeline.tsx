@@ -1,17 +1,25 @@
 "use client";
 
+import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { motion } from "framer-motion";
-import { 
-  Wrench, 
-  CheckCircle2, 
-  XCircle, 
+import { Button } from "@/components/ui/button";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  Wrench,
+  CheckCircle2,
+  XCircle,
   Clock,
   MousePointer,
   Keyboard,
   Eye,
-  ArrowRight,
+  Image,
+  ChevronDown,
+  ChevronUp,
+  Terminal,
+  Command,
+  Timer,
+  Scroll,
 } from "lucide-react";
 
 interface ToolExecution {
@@ -19,11 +27,12 @@ interface ToolExecution {
   timestamp: string;
   tool: string;
   parameters: Record<string, any>;
-  status: "success" | "failed" | "executing";
+  status: "success" | "failed" | "executing" | "running";
   duration_ms: number;
   result?: any;
   screenshot_before?: string;
   screenshot_after?: string;
+  error?: string;
 }
 
 interface ToolExecutionTimelineProps {
@@ -35,20 +44,85 @@ const getToolIcon = (tool: string) => {
   switch (tool.toLowerCase()) {
     case "click":
     case "mouse_click":
+    case "double_click":
+    case "right_click":
       return MousePointer;
     case "type":
     case "type_text":
-    case "keyboard":
       return Keyboard;
     case "screenshot":
     case "capture":
       return Eye;
+    case "hotkey":
+      return Command;
+    case "wait":
+      return Timer;
+    case "scroll":
+      return Scroll;
+    case "execute_python":
+    case "execute_command":
+      return Terminal;
     default:
       return Wrench;
   }
 };
 
+// Screenshot viewer component with loading state
+function ScreenshotViewer({ url, label }: { url: string; label: string }) {
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
+
+  if (!url) return null;
+
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground font-medium">{label}</p>
+      <div className="relative rounded-lg border overflow-hidden bg-muted/50">
+        {isLoading && !hasError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-muted">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Image className="h-4 w-4 animate-pulse" />
+              Loading...
+            </div>
+          </div>
+        )}
+        {hasError ? (
+          <div className="flex items-center justify-center h-24 text-xs text-muted-foreground">
+            <XCircle className="h-4 w-4 mr-1" />
+            Failed to load
+          </div>
+        ) : (
+          <img
+            src={url}
+            alt={label}
+            className={`w-full h-auto transition-opacity duration-200 ${isLoading ? 'opacity-0' : 'opacity-100'}`}
+            onLoad={() => setIsLoading(false)}
+            onError={() => {
+              setIsLoading(false);
+              setHasError(true);
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ToolExecutionTimeline({ executions, isLoading }: ToolExecutionTimelineProps) {
+  const [expandedScreenshots, setExpandedScreenshots] = useState<Set<number>>(new Set());
+
+  const toggleScreenshots = (index: number) => {
+    setExpandedScreenshots((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
   if (isLoading) {
     return (
       <Card>
@@ -77,7 +151,7 @@ export function ToolExecutionTimeline({ executions, isLoading }: ToolExecutionTi
           Tool Execution Timeline
         </CardTitle>
         <CardDescription>
-          Chronological log of all tool calls and results
+          Chronological log of all tool calls and results ({executions.length} executions)
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -91,14 +165,16 @@ export function ToolExecutionTimeline({ executions, isLoading }: ToolExecutionTi
               const ToolIcon = getToolIcon(execution.tool);
               const isSuccess = execution.status === "success";
               const isFailed = execution.status === "failed";
-              const isExecuting = execution.status === "executing";
+              const isExecuting = execution.status === "executing" || execution.status === "running";
+              const hasScreenshots = execution.screenshot_before || execution.screenshot_after;
+              const isExpanded = expandedScreenshots.has(index);
 
               return (
                 <motion.div
                   key={index}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.1 }}
+                  transition={{ delay: Math.min(index * 0.05, 0.5) }}
                   className="relative pl-16"
                 >
                   {/* Timeline Dot */}
@@ -147,17 +223,40 @@ export function ToolExecutionTimeline({ executions, isLoading }: ToolExecutionTi
                             <span className="font-medium">{execution.tool}</span>
                           </div>
                         </div>
-                        <Badge
-                          variant={
-                            isSuccess
-                              ? "default"
-                              : isFailed
-                              ? "destructive"
-                              : "secondary"
-                          }
-                        >
-                          {execution.status}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          {hasScreenshots && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => toggleScreenshots(index)}
+                            >
+                              <Image className="h-3 w-3 mr-1" />
+                              {isExpanded ? (
+                                <>
+                                  Hide
+                                  <ChevronUp className="h-3 w-3 ml-1" />
+                                </>
+                              ) : (
+                                <>
+                                  Screenshots
+                                  <ChevronDown className="h-3 w-3 ml-1" />
+                                </>
+                              )}
+                            </Button>
+                          )}
+                          <Badge
+                            variant={
+                              isSuccess
+                                ? "default"
+                                : isFailed
+                                ? "destructive"
+                                : "secondary"
+                            }
+                          >
+                            {execution.status}
+                          </Badge>
+                        </div>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-3">
@@ -173,7 +272,7 @@ export function ToolExecutionTimeline({ executions, isLoading }: ToolExecutionTi
                       </div>
 
                       {/* Parameters */}
-                      {Object.keys(execution.parameters).length > 0 && (
+                      {execution.parameters && Object.keys(execution.parameters).length > 0 && (
                         <div>
                           <p className="text-xs font-medium text-muted-foreground mb-1">
                             Parameters:
@@ -185,14 +284,23 @@ export function ToolExecutionTimeline({ executions, isLoading }: ToolExecutionTi
                                 className="text-xs bg-muted px-2 py-1 rounded font-mono"
                               >
                                 <span className="text-muted-foreground">{key}:</span>{" "}
-                                <span>
-                                  {typeof value === 'object' && value !== null
-                                    ? JSON.stringify(value)
-                                    : String(value)}
+                                <span className="break-all">
+                                  {typeof value === "object" && value !== null
+                                    ? JSON.stringify(value).slice(0, 50)
+                                    : String(value).slice(0, 50)}
+                                  {String(value).length > 50 ? "..." : ""}
                                 </span>
                               </div>
                             ))}
                           </div>
+                        </div>
+                      )}
+
+                      {/* Error message */}
+                      {execution.error && (
+                        <div className="p-2 bg-destructive/10 rounded border border-destructive/20">
+                          <p className="text-xs font-medium text-destructive">Error:</p>
+                          <p className="text-xs text-destructive/80 mt-1">{execution.error}</p>
                         </div>
                       )}
 
@@ -202,37 +310,39 @@ export function ToolExecutionTimeline({ executions, isLoading }: ToolExecutionTi
                           <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
                             View Result
                           </summary>
-                          <pre className="mt-2 p-2 bg-muted rounded overflow-auto">
+                          <pre className="mt-2 p-2 bg-muted rounded overflow-auto max-h-40">
                             {JSON.stringify(execution.result, null, 2)}
                           </pre>
                         </details>
                       )}
 
-                      {/* Screenshots */}
-                      {(execution.screenshot_before || execution.screenshot_after) && (
-                        <div className="grid grid-cols-2 gap-2">
-                          {execution.screenshot_before && (
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">Before</p>
-                              <img
-                                src={execution.screenshot_before}
-                                alt="Before"
-                                className="rounded border w-full"
-                              />
+                      {/* Screenshots (collapsible) */}
+                      <AnimatePresence>
+                        {hasScreenshots && isExpanded && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: "auto" }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="overflow-hidden"
+                          >
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                              {execution.screenshot_before && (
+                                <ScreenshotViewer
+                                  url={execution.screenshot_before}
+                                  label="Before Action"
+                                />
+                              )}
+                              {execution.screenshot_after && (
+                                <ScreenshotViewer
+                                  url={execution.screenshot_after}
+                                  label="After Action"
+                                />
+                              )}
                             </div>
-                          )}
-                          {execution.screenshot_after && (
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">After</p>
-                              <img
-                                src={execution.screenshot_after}
-                                alt="After"
-                                className="rounded border w-full"
-                              />
-                            </div>
-                          )}
-                        </div>
-                      )}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </CardContent>
                   </Card>
                 </motion.div>

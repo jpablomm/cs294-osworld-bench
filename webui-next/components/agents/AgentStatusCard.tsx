@@ -10,6 +10,7 @@ interface AgentStatusCardProps {
   status?: {
     status: string;
     current_step?: number;
+    max_steps?: number;
     current_action?: string;
     vm_status?: string;
     tools_available?: number;
@@ -18,6 +19,7 @@ interface AgentStatusCardProps {
     tools_used?: string[];
     message_count?: number;
     latest_message?: string;
+    white_agent_url?: string;
   };
   isLive?: boolean;
 }
@@ -97,8 +99,11 @@ export function AgentStatusCard({ agent, status, isLive = false }: AgentStatusCa
               <>
                 {status.current_step !== undefined && (
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Current Step:</span>
-                    <span className="font-mono">{status.current_step}</span>
+                    <span className="text-muted-foreground">Step:</span>
+                    <span className="font-mono">
+                      {status.current_step}
+                      {status.max_steps && ` / ${status.max_steps}`}
+                    </span>
                   </div>
                 )}
                 {status.latest_message && (
