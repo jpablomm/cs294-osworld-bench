@@ -36,7 +36,7 @@ a2a==0.43
 
 # AgentBeats controller - RE-ENABLED after successful local testing!
 # Controller works after installing missing OSWorld dependencies
-earthshaker==0.2.0
+earthshaker==0.2.1
 
 # OSWorld SetupController dependencies (minimal - patched __init__.py to avoid loading all evaluators)
 # SetupController direct imports:
