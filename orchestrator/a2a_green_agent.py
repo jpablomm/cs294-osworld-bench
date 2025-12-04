@@ -337,8 +337,10 @@ def _execute_osworld_setup(vm_ip: str, task_config: list) -> bool:
         keyring_kill_config = [
             {
                 "type": "execute",
-                "command": ["pkill", "-f", "gnome-keyring-daemon"],
-                "shell": False
+                "parameters": {
+                    "command": ["pkill", "-f", "gnome-keyring-daemon"],
+                    "shell": False
+                }
             }
         ]
         logger.info("Killing GNOME keyring daemon to prevent password prompts...")
