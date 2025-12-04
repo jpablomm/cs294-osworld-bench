@@ -193,9 +193,11 @@ def evaluate_task(
     logger.info(f"VM IP: {vm_ip}, Port: {server_port}")
 
     # Create minimal env object
+    # Note: Use port 9222 because tasks use socat to forward 9222->1337
     env = MinimalEnv(
         vm_ip=vm_ip,
         server_port=server_port,
+        chromium_port=9222,
         cache_dir=cache_dir,
         task_id=task_id
     )

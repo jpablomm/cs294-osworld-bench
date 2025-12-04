@@ -1,13 +1,24 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useTasks, useLaunchAssessment } from "@/lib/api/queries";
+import { useTasks, useLaunchAssessment, useTaskStats } from "@/lib/api/queries";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { PlayCircle, Search, Loader2, CheckCircle2 } from "lucide-react";
+import {
+  PlayCircle,
+  Search,
+  Loader2,
+  CheckCircle2,
+  TrendingUp,
+  Clock,
+  Zap,
+  BarChart3,
+  FlaskConical,
+} from "lucide-react";
 import type { Task } from "@/lib/api/types";
 
 export default function LaunchPage() {
@@ -18,11 +29,15 @@ export default function LaunchPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
-  
-  // Configuration state
+
+  // Configuration state with validation
   const [maxSteps, setMaxSteps] = useState(15);
   const [numRuns, setNumRuns] = useState(1);
-  const [vmImage, setVmImage] = useState("osworld-golden-v5-gnome");
+
+  // Fetch stats for selected task
+  const { data: taskStats, isLoading: statsLoading } = useTaskStats(
+    selectedTask?.id || null
+  );
 
   // Get unique domains
   const domains = useMemo(() => {
@@ -34,14 +49,14 @@ export default function LaunchPage() {
   // Filter tasks
   const filteredTasks = useMemo(() => {
     if (!tasks) return [];
-    
+
     let filtered = tasks;
-    
+
     // Filter by domain
     if (selectedDomain) {
       filtered = filtered.filter((t) => t.domain === selectedDomain);
     }
-    
+
     // Filter by search query
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -52,35 +67,67 @@ export default function LaunchPage() {
           t.domain?.toLowerCase().includes(query)
       );
     }
-    
+
     return filtered;
   }, [tasks, selectedDomain, searchQuery]);
 
-  const handleLaunch = async () => {
-    if (!selectedTask) return;
+  // Input validation
+  const handleMaxStepsChange = (value: string) => {
+    const num = parseInt(value);
+    if (isNaN(num)) return;
+    setMaxSteps(Math.min(50, Math.max(1, num)));
+  };
+
+  const handleNumRunsChange = (value: string) => {
+    const num = parseInt(value);
+    if (isNaN(num)) return;
+    setNumRuns(Math.min(10, Math.max(1, num)));
+  };
+
+  const handleLaunch = useCallback(async () => {
+    if (!selectedTask || launchMutation.isPending) return;
 
     try {
       const result = await launchMutation.mutateAsync({
         task_id: selectedTask.id,
         domain: selectedTask.domain,
         max_steps: maxSteps,
-        vm_image: vmImage,
+        vm_image: "osworld-gnome-v6",
         num_runs: numRuns,
       });
 
       // Redirect based on number of runs
-      if (numRuns === 1) {
+      if (numRuns === 1 && result.assessment_id) {
         router.push(`/assessment/${result.assessment_id}/live`);
-      } else {
+      } else if (result.batch_id) {
         router.push(`/batch/${result.batch_id}`);
       }
     } catch (error) {
       console.error("Launch failed:", error);
     }
-  };
+  }, [selectedTask, launchMutation, maxSteps, numRuns, router]);
+
+  // Keyboard shortcut: Enter to launch
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && selectedTask && !launchMutation.isPending) {
+        // Don't trigger if typing in an input
+        if (
+          e.target instanceof HTMLInputElement ||
+          e.target instanceof HTMLSelectElement
+        ) {
+          return;
+        }
+        handleLaunch();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedTask, launchMutation.isPending, handleLaunch]);
 
   return (
-    <div className="container py-8">
+    <div className="container max-w-5xl mx-auto py-8">
       <div className="flex flex-col gap-8">
         {/* Header */}
         <div>
@@ -96,21 +143,29 @@ export default function LaunchPage() {
             {/* Search and Filters */}
             <Card>
               <CardHeader>
-                <CardTitle>Select Task</CardTitle>
-                <CardDescription>
-                  Choose an OSWorld task to assess the agent on
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Select Task</CardTitle>
+                    <CardDescription>
+                      Choose an OSWorld task to assess the agent on
+                    </CardDescription>
+                  </div>
+                  {/* Task count badge */}
+                  <Badge variant="secondary" className="text-xs">
+                    {filteredTasks.length} {filteredTasks.length === 1 ? "task" : "tasks"}
+                  </Badge>
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 {/* Search */}
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <input
+                  <Input
                     type="text"
                     placeholder="Search tasks by name or instruction..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-10 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="pl-10"
                   />
                 </div>
 
@@ -138,7 +193,7 @@ export default function LaunchPage() {
                 <Separator />
 
                 {/* Task List */}
-                <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                <div className="space-y-2 max-h-[400px] overflow-y-auto">
                   {tasksLoading ? (
                     <div className="flex items-center justify-center py-8">
                       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -194,81 +249,108 @@ export default function LaunchPage() {
                 {/* Max Steps */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Max Steps</label>
-                  <input
+                  <Input
                     type="number"
-                    min="1"
-                    max="50"
+                    min={1}
+                    max={50}
                     value={maxSteps}
-                    onChange={(e) => setMaxSteps(parseInt(e.target.value) || 15)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onChange={(e) => handleMaxStepsChange(e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Maximum number of agent actions
+                    Maximum number of agent actions (1-50)
                   </p>
                 </div>
 
                 {/* Number of Runs */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Number of Runs</label>
-                  <input
+                  <Input
                     type="number"
-                    min="1"
-                    max="10"
+                    min={1}
+                    max={10}
                     value={numRuns}
-                    onChange={(e) => setNumRuns(parseInt(e.target.value) || 1)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onChange={(e) => handleNumRunsChange(e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Run task multiple times for rolling average
-                  </p>
-                </div>
-
-                {/* VM Image */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">VM Image</label>
-                  <select
-                    value={vmImage}
-                    onChange={(e) => setVmImage(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <option value="osworld-golden-v5-gnome">
-                      OSWorld Golden v5 (GNOME)
-                    </option>
-                    <option value="osworld-golden-v3-gnome">
-                      OSWorld Golden v3 (GNOME)
-                    </option>
-                    <option value="osworld-golden-v2-gnome">
-                      OSWorld Golden v2 (GNOME)
-                    </option>
-                  </select>
-                  <p className="text-xs text-muted-foreground">
-                    VM image to use for assessment
+                    Run task multiple times for rolling average (1-10)
                   </p>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Selected Task Preview */}
+            {/* Selected Task Preview with Stats */}
             {selectedTask && (
               <Card>
-                <CardHeader>
-                  <CardTitle>Selected Task</CardTitle>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Selected Task</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div>
-                    <p className="text-sm font-medium mb-1">Task ID</p>
-                    <p className="text-sm text-muted-foreground">{selectedTask.id}</p>
+                    <p className="text-xs text-muted-foreground mb-1">Task ID</p>
+                    <p className="text-sm font-medium">{selectedTask.id}</p>
                   </div>
                   <div>
-                    <p className="text-sm font-medium mb-1">Domain</p>
+                    <p className="text-xs text-muted-foreground mb-1">Domain</p>
                     <Badge variant="secondary">{selectedTask.domain}</Badge>
                   </div>
                   <div>
-                    <p className="text-sm font-medium mb-1">Instruction</p>
-                    <p className="text-sm text-muted-foreground">
-                      {selectedTask.instruction}
-                    </p>
+                    <p className="text-xs text-muted-foreground mb-1">Instruction</p>
+                    <p className="text-sm">{selectedTask.instruction}</p>
                   </div>
+
+                  {/* Evaluator Info */}
+                  {selectedTask.evaluator && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                        <FlaskConical className="h-3 w-3" />
+                        Evaluation Method
+                      </p>
+                      <Badge variant="outline" className="font-mono text-xs">
+                        {selectedTask.evaluator.func}
+                      </Badge>
+                    </div>
+                  )}
+
+                  {/* Historical Stats */}
+                  {statsLoading ? (
+                    <div className="pt-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : taskStats && taskStats.total_runs > 0 ? (
+                    <>
+                      <Separator />
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+                          <BarChart3 className="h-3 w-3" />
+                          Historical Performance ({taskStats.total_runs} runs)
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="flex items-center gap-1.5 text-xs">
+                            <TrendingUp className="h-3 w-3 text-success" />
+                            <span className="text-muted-foreground">Success:</span>
+                            <span className="font-medium">{taskStats.success_rate}%</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs">
+                            <Zap className="h-3 w-3 text-primary" />
+                            <span className="text-muted-foreground">Avg steps:</span>
+                            <span className="font-medium">{taskStats.avg_steps}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs">
+                            <Clock className="h-3 w-3 text-warning" />
+                            <span className="text-muted-foreground">Avg time:</span>
+                            <span className="font-medium">{taskStats.avg_time_sec}s</span>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : taskStats?.total_runs === 0 ? (
+                    <>
+                      <Separator />
+                      <p className="text-xs text-muted-foreground italic">
+                        No previous runs for this task
+                      </p>
+                    </>
+                  ) : null}
                 </CardContent>
               </Card>
             )}
@@ -293,6 +375,13 @@ export default function LaunchPage() {
               )}
             </Button>
 
+            {/* Keyboard hint */}
+            {selectedTask && !launchMutation.isPending && (
+              <p className="text-xs text-muted-foreground text-center">
+                Press <kbd className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">Enter</kbd> to launch
+              </p>
+            )}
+
             {launchMutation.isError && (
               <p className="text-sm text-destructive">
                 Failed to launch assessment. Please try again.
@@ -304,4 +393,3 @@ export default function LaunchPage() {
     </div>
   );
 }
-

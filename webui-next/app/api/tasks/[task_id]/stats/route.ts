@@ -12,7 +12,7 @@ export async function GET(
 ) {
   try {
     const { task_id } = await context.params;
-    const stats = getTaskStatistics(task_id);
+    const stats = await getTaskStatistics(task_id);
 
     return NextResponse.json(stats);
   } catch (error) {

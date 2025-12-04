@@ -14,8 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CompactAgentBar } from "@/components/agents/CompactAgentBar";
 import { ProgressStepper } from "@/components/agents/ProgressStepper";
-import { CurrentActionPanel } from "@/components/agents/CurrentActionPanel";
-import { ActivityFeed } from "@/components/agents/ActivityFeed";
+import { StepViewer } from "@/components/agents/StepViewer";
 import {
   ArrowLeft,
   Loader2,
@@ -105,21 +104,9 @@ export default function LiveAssessmentPage() {
     return "Initializing...";
   };
 
-  // Check if we're still initializing (no tool executions yet)
-  const isInitializing =
-    isActive &&
-    vmProgress.stage !== "done" &&
-    (!tools?.executions || tools.executions.length === 0) &&
-    !setupProgress?.completed;
-
-  // Get the latest tool execution
-  const latestTool =
-    tools?.executions && tools.executions.length > 0
-      ? tools.executions[tools.executions.length - 1]
-      : undefined;
 
   return (
-    <div className="container py-6 space-y-4">
+    <div className="container max-w-5xl mx-auto py-6 space-y-4">
       {/* Header Row */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -214,37 +201,18 @@ export default function LiveAssessmentPage() {
         isComplete={isCompleted}
       />
 
-      {/* Main Content Area - Two columns on larger screens */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Left: Current Action / Screenshot */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-        >
-          <CurrentActionPanel
-            latestTool={latestTool}
-            greenAgentMessage={greenAgent?.latest_message}
-            isInitializing={isInitializing}
-            vmStage={vmProgress.stage}
-            vmMessage={vmProgress.message}
-          />
-        </motion.div>
-
-        {/* Right: Activity Feed */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-        >
-          <ActivityFeed
-            messages={messages?.messages || []}
-            tools={tools?.executions || []}
-            isLoading={!messages && !tools}
-            autoScroll={isActive}
-          />
-        </motion.div>
-      </div>
+      {/* Step Viewer - Full width screenshot with reasoning and actions */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+      >
+        <StepViewer
+          messages={messages?.messages || []}
+          tools={tools?.executions || []}
+          isActive={isActive}
+        />
+      </motion.div>
 
       {/* Results Summary - Only shown when completed */}
       {(isCompleted || isFailed) && (

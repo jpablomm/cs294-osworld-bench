@@ -26,7 +26,11 @@ export async function GET(request: NextRequest) {
     };
 
     const assessments = await listAssessments(params);
-    return NextResponse.json(assessments);
+    return NextResponse.json({
+      assessments,
+      limit: params.limit,
+      offset: params.offset,
+    });
   } catch (error) {
     console.error("Error listing assessments:", error);
     return NextResponse.json(

@@ -12,7 +12,7 @@ export async function GET(
 ) {
   try {
     const { task_id } = await context.params;
-    const task = getTaskById(task_id);
+    const task = await getTaskById(task_id);
 
     if (!task) {
       return NextResponse.json(

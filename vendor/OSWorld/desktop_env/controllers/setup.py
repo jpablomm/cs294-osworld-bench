@@ -305,9 +305,24 @@ class SetupController:
         if not shell and isinstance(command, str) and len(command.split()) > 1:
             logger.warning("Command should be a list of strings. Now it is a string. Will split it by space.")
             command = command.split()
-            
-        if command[0] == "google-chrome" and self.use_proxy:
-            command.append("--proxy-server=http://127.0.0.1:18888")  # Use the proxy server set up by _proxy_setup
+
+        # Ensure command is a list for modification
+        if isinstance(command, list) and len(command) > 0 and command[0] == "google-chrome":
+            # Add flags to suppress first-run dialogs and ensure DevTools starts properly
+            # Chrome 142+ requires --user-data-dir for remote debugging to work
+            chrome_flags = [
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-popup-blocking',
+                '--user-data-dir=/tmp/chrome-remote-debug',
+            ]
+            for flag in chrome_flags:
+                # Check if flag (or its prefix for flags with values) is already present
+                flag_prefix = flag.split('=')[0]
+                if not any(f.startswith(flag_prefix) for f in command):
+                    command.append(flag)
+            if self.use_proxy:
+                command.append("--proxy-server=http://127.0.0.1:18888")  # Use the proxy server set up by _proxy_setup
 
         payload = json.dumps({"command": command, "shell": shell})
         headers = {"Content-Type": "application/json"}
@@ -586,8 +601,9 @@ class SetupController:
         logger.debug("PLAYWRIGHT ENV: %s", repr(os.environ))
 
         # Give Chrome time to start before first connection attempt
-        logger.info("Waiting 15 seconds for Chrome to initialize...")
-        time.sleep(15)
+        # Chrome 142+ with a new --user-data-dir can take 40+ seconds to start DevTools
+        logger.info("Waiting 45 seconds for Chrome to initialize...")
+        time.sleep(45)
 
         for attempt in range(15):
             if attempt > 0:

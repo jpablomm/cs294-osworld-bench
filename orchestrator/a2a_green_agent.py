@@ -328,9 +328,12 @@ def _execute_osworld_setup(vm_ip: str, task_config: list) -> bool:
         logger.info(f"Created cache directory: {cache_dir.absolute()}")
 
         # Create SetupController
+        # Note: Use port 9222 because tasks use socat to forward 9222->1337
+        # Chrome binds to localhost:1337, socat binds to 0.0.0.0:9222
         setup_controller = SetupController(
             vm_ip=vm_ip,
-            server_port=5000
+            server_port=5000,
+            chromium_port=9222
         )
 
         # Execute setup
