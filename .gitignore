@@ -54,6 +54,7 @@ logs/
 tmp/
 temp/
 cache/
+temp_artifacts/
 
 # Jupyter Notebook
 .ipynb_checkpoints/
