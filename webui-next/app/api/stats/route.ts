@@ -8,7 +8,7 @@ import { getStats } from "@/lib/db/client";
 
 export async function GET() {
   try {
-    const stats = getStats();
+    const stats = await getStats();
     return NextResponse.json(stats);
   } catch (error) {
     console.error("Error getting stats:", error);
