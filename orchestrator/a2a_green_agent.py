@@ -600,7 +600,7 @@ async def _execute_assessment(
                 screenshot_after = result.get("screenshot_after")
 
                 # LLM fallback configuration
-                enable_llm_fallback = config.get("enable_llm_fallback", False)
+                enable_llm_fallback = config.get("enable_llm_fallback", True)
                 llm_provider = config.get("llm_judge_provider", "openai")
                 llm_model = config.get("llm_judge_model")  # None = use default
                 llm_confidence_threshold = config.get("llm_judge_confidence", 0.7)
