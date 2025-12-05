@@ -27,55 +27,58 @@ load_dotenv()
 # Add OSWorld to path for SetupController
 sys.path.insert(0, str(Path(__file__).parent.parent / "vendor" / "OSWorld"))
 
-# Import existing orchestrator components
-from .vm_manager import VMManager
-from .storage import StorageManager
-from .task_executor import TaskExecutor
-from .supabase_storage import upload_screenshot
+# All orchestrator imports are done lazily to avoid blocking subprocess startup
+# GCP and Supabase clients can hang during import in Cloud Run subprocesses
+# VMManager, StorageManager, TaskExecutor, upload_screenshot are imported in getter functions
 
 # SetupController is imported lazily in _execute_osworld_setup to speed up startup
-# from desktop_env.controllers.setup import SetupController
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# A2A Protocol Models (following A2A spec: https://agent2agent.info/docs/concepts/agentcard/)
+# A2A Protocol Models (following A2A SDK: a2a.types)
+# These models must match the a2a SDK's AgentCard schema exactly for validation to pass
 class AgentSkill(BaseModel):
-    """A2A Skill definition"""
+    """A2A Skill definition - matches a2a.types.AgentSkill"""
     id: str
     name: str
     description: str
-    tags: list[str] = []
-    inputModes: list[str] = ["application/json"]
-    outputModes: list[str] = ["application/json"]
+    tags: list[str]  # Required field, not optional
+    inputModes: Optional[list[str]] = None
+    outputModes: Optional[list[str]] = None
 
 
-class AgentAuthentication(BaseModel):
-    """A2A Authentication requirements"""
-    schemes: list[str] = []
+class AgentProvider(BaseModel):
+    """A2A Provider definition - matches a2a.types.AgentProvider"""
+    organization: str
+    url: str
 
 
 class AgentCapabilities(BaseModel):
-    """A2A Capability flags"""
-    streaming: bool = False
-    pushNotifications: bool = False
-    stateTransitionHistory: bool = True
+    """A2A Capability flags - matches a2a.types.AgentCapabilities"""
+    streaming: Optional[bool] = None
+    pushNotifications: Optional[bool] = None
+    stateTransitionHistory: Optional[bool] = None
+    extensions: Optional[list] = None
 
 
 class AgentCard(BaseModel):
-    """Agent self-description following A2A protocol spec"""
+    """Agent self-description following A2A SDK schema (a2a.types.AgentCard)"""
+    # Required fields
     name: str
     description: str
     url: str
     version: str
-    defaultInputModes: list[str] = ["application/json"]
-    defaultOutputModes: list[str] = ["application/json"]
-    skills: list[AgentSkill] = []
-    authentication: AgentAuthentication = AgentAuthentication()
-    capabilities: AgentCapabilities = AgentCapabilities()
+    capabilities: AgentCapabilities
+    defaultInputModes: list[str]
+    defaultOutputModes: list[str]
+    skills: list[AgentSkill]
+    # Optional fields
     documentationUrl: Optional[str] = None
-    provider: Optional[str] = None
+    provider: Optional[AgentProvider] = None
+    protocolVersion: Optional[str] = "0.3.0"
+    preferredTransport: Optional[str] = "JSONRPC"
 
 
 class A2ATask(BaseModel):
@@ -103,14 +106,43 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# Initialize managers (reuse existing orchestrator components)
-# Check both GCP_PROJECT and GOOGLE_CLOUD_PROJECT environment variables
-gcp_project = os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
-logger.info(f"Initializing VMManager with project_id from env: {gcp_project}")
-vm_manager = VMManager(project_id=gcp_project)
-logger.info(f"VMManager initialized with project_id: {vm_manager.project_id}")
-storage_manager = StorageManager(use_gcs=False)  # Local storage for demo
-task_executor = TaskExecutor()
+# Lazy initialization of managers to avoid blocking subprocess startup
+# GCP API calls and Supabase clients can hang during import in Cloud Run subprocesses
+_vm_manager = None
+_storage_manager = None
+_task_executor = None
+
+def get_vm_manager():
+    """Lazily initialize VMManager on first use"""
+    global _vm_manager
+    if _vm_manager is None:
+        from .vm_manager import VMManager
+        gcp_project = os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        logger.info(f"Initializing VMManager with project_id from env: {gcp_project}")
+        _vm_manager = VMManager(project_id=gcp_project)
+        logger.info(f"VMManager initialized with project_id: {_vm_manager.project_id}")
+    return _vm_manager
+
+def get_storage_manager():
+    """Lazily initialize StorageManager on first use"""
+    global _storage_manager
+    if _storage_manager is None:
+        from .storage import StorageManager
+        _storage_manager = StorageManager(use_gcs=False)
+    return _storage_manager
+
+def get_task_executor():
+    """Lazily initialize TaskExecutor on first use"""
+    global _task_executor
+    if _task_executor is None:
+        from .task_executor import TaskExecutor
+        _task_executor = TaskExecutor()
+    return _task_executor
+
+def get_upload_screenshot():
+    """Lazily import upload_screenshot function"""
+    from .supabase_storage import upload_screenshot
+    return upload_screenshot
 
 # Track active assessments
 active_assessments: Dict[str, Dict[str, Any]] = {}
@@ -175,13 +207,22 @@ async def _push_event_to_webui(callback_url: Optional[str], event_data: Dict[str
 def _build_agent_card(request_url: str = None) -> AgentCard:
     """Build agent card with dynamic URL based on request or environment"""
     # Try to determine the agent URL
-    if request_url:
+    # Priority: CLOUDRUN_HOST > request URL > HOST:PORT
+    cloudrun_host = os.getenv("CLOUDRUN_HOST")
+    https_enabled = os.getenv("HTTPS_ENABLED", "").lower() in ("true", "1", "yes")
+
+    if cloudrun_host:
+        # Use explicit Cloud Run host (e.g., for cloudflared forwarding)
+        protocol = "https" if https_enabled else "http"
+        agent_url = f"{protocol}://{cloudrun_host}"
+    elif request_url:
         agent_url = request_url.split("/.well-known")[0].split("/agent-card")[0]
     else:
         # Fallback to environment or default
         host = os.getenv("AGENT_HOST", os.getenv("HOST", "0.0.0.0"))
         port = os.getenv("PORT", os.getenv("AGENT_PORT", "8080"))
-        agent_url = f"http://{host}:{port}"
+        protocol = "https" if https_enabled else "http"
+        agent_url = f"{protocol}://{host}:{port}"
 
     return AgentCard(
         name="OSWorld Assessment Agent",
@@ -192,7 +233,10 @@ def _build_agent_card(request_url: str = None) -> AgentCard:
         ),
         url=agent_url,
         version="0.1.0",
-        provider="Berkeley CS294",
+        provider=AgentProvider(
+            organization="Berkeley CS294",
+            url="https://github.com/agentbeats/green-agent"
+        ),
         documentationUrl="https://github.com/agentbeats/green-agent",
         defaultInputModes=["application/json"],
         defaultOutputModes=["application/json"],
@@ -216,9 +260,6 @@ def _build_agent_card(request_url: str = None) -> AgentCard:
                 tags=["os", "files", "settings", "gnome"],
             ),
         ],
-        authentication=AgentAuthentication(
-            schemes=["bearer"] if GREEN_AGENT_API_KEY else []
-        ),
         capabilities=AgentCapabilities(
             streaming=False,
             pushNotifications=True,
@@ -473,7 +514,7 @@ async def _execute_assessment(
         })
 
         vm_info = await asyncio.to_thread(
-            vm_manager.create_vm,
+            get_vm_manager().create_vm,
             assessment_id
         )
         logger.info(f"VM created: {vm_info['vm_name']} at {vm_info['vm_ip']}")
@@ -497,7 +538,7 @@ async def _execute_assessment(
         })
 
         vm_ready = await asyncio.to_thread(
-            vm_manager.wait_for_vm_ready,
+            get_vm_manager().wait_for_vm_ready,
             vm_info["vm_ip"],
             timeout=600  # Increased to 600 seconds (10 minutes) for slower VM startups
         )
@@ -521,7 +562,7 @@ async def _execute_assessment(
         if not osworld_task:
             try:
                 logger.info("Loading full OSWorld task configuration from files...")
-                osworld_task = task_executor.load_osworld_task(
+                osworld_task = get_task_executor().load_osworld_task(
                     config["osworld_task_id"],
                     domain=config.get("domain")
                 )
@@ -775,7 +816,7 @@ async def _execute_assessment(
             })
 
         # Step 5: Add metadata
-        result["vm_cost"] = vm_manager.get_vm_cost(time.time() - start_time)
+        result["vm_cost"] = get_vm_manager().get_vm_cost(time.time() - start_time)
         result["vm_info"] = vm_info
         result["assessment_id"] = assessment_id
         result["total_time_sec"] = time.time() - start_time
@@ -805,7 +846,7 @@ async def _execute_assessment(
         })
 
         await asyncio.to_thread(
-            vm_manager.delete_vm,
+            get_vm_manager().delete_vm,
             assessment_id
         )
 
@@ -829,7 +870,7 @@ async def _execute_assessment(
             try:
                 logger.info(f"Cleaning up VM {vm_info['vm_name']} ({assessment_id}) due to failure...")
                 await asyncio.to_thread(
-                    vm_manager.delete_vm,
+                    get_vm_manager().delete_vm,
                     assessment_id
                 )
                 logger.info(f"VM {vm_info['vm_name']} successfully cleaned up")
@@ -1698,7 +1739,7 @@ async def _execute_with_white_agent(
                         logger.info(f"[{step}] Captured before screenshot")
 
                         # Upload to Supabase Storage
-                        screenshot_before_url = await upload_screenshot(
+                        screenshot_before_url = await get_upload_screenshot()(
                             assessment_id=assessment_id,
                             step=step,
                             screenshot_bytes=screenshot_before_resp.content,
@@ -1829,7 +1870,7 @@ async def _execute_with_white_agent(
 
                 # Upload after screenshot to Supabase Storage
                 try:
-                    screenshot_after_url = await upload_screenshot(
+                    screenshot_after_url = await get_upload_screenshot()(
                         assessment_id=assessment_id,
                         step=step,
                         screenshot_bytes=screenshot_resp.content,

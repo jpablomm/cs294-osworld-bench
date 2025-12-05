@@ -109,11 +109,17 @@ echo ""
 # Step 3: Deploy to Cloud Run
 echo "Step 3: Deploying to Cloud Run..."
 
+# Get the service URL to set CLOUDRUN_HOST (predict it from service name)
+# Cloud Run URLs follow pattern: SERVICE-HASH-REGION.a.run.app
+# We'll update it after deployment, but set HTTPS_ENABLED now
+PREDICTED_HOST="${SERVICE_NAME}-750082808015.${REGION}.run.app"
+
 # Build environment variables
 ENV_VARS="GCP_PROJECT=$PROJECT_ID"
 ENV_VARS="$ENV_VARS,USE_NATIVE_OSWORLD=1"
 ENV_VARS="$ENV_VARS,USE_FAKE_OSWORLD=0"
 ENV_VARS="$ENV_VARS,OSWORLD_MAX_STEPS=15"
+ENV_VARS="$ENV_VARS,HTTPS_ENABLED=true"
 
 # Load Supabase credentials from .env file if available
 if [ -f ".env" ]; then
@@ -144,11 +150,26 @@ gcloud run deploy "$SERVICE_NAME" \
 echo "✓ Deployed to Cloud Run"
 echo ""
 
-# Step 4: Get service URL
+# Step 4: Get service URL and update CLOUDRUN_HOST
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
     --region "$REGION" \
     --project="$PROJECT_ID" \
     --format "value(status.url)")
+
+# Extract hostname from URL (remove https://)
+CLOUDRUN_HOST=$(echo "$SERVICE_URL" | sed 's|https://||')
+
+echo "Step 4: Updating CLOUDRUN_HOST environment variable..."
+echo "CLOUDRUN_HOST: $CLOUDRUN_HOST"
+
+# Update the service with the actual CLOUDRUN_HOST
+gcloud run services update "$SERVICE_NAME" \
+    --region "$REGION" \
+    --project="$PROJECT_ID" \
+    --update-env-vars "CLOUDRUN_HOST=$CLOUDRUN_HOST"
+
+echo "✓ CLOUDRUN_HOST set"
+echo ""
 
 echo "========================================="
 echo "Deployment Complete!"
