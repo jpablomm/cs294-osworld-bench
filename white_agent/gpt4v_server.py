@@ -71,18 +71,24 @@ class AgentCard(BaseModel):
     metadata: Dict[str, Any] | None = None
 
 
-def initialize_agent(model: str = "gpt-4o", temperature: float = 1.0):
-    """Initialize GPT-4V PromptAgent"""
+def initialize_agent(model: str = "gpt-4o", temperature: float = 1.0, observation_type: str = "screenshot"):
+    """Initialize GPT-4V PromptAgent
+
+    Args:
+        model: LLM model to use
+        temperature: Sampling temperature
+        observation_type: One of "screenshot", "a11y_tree", "screenshot_a11y_tree"
+    """
     global agent
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable not set")
 
-    logger.info(f"Initializing PromptAgent with model={model}, temperature={temperature}")
+    logger.info(f"Initializing PromptAgent with model={model}, temperature={temperature}, observation_type={observation_type}")
     agent = PromptAgent(
         model=model,
-        observation_type="screenshot",
+        observation_type=observation_type,
         action_space="pyautogui",
         max_tokens=1500,
         temperature=temperature,
@@ -97,7 +103,9 @@ async def startup_event():
     try:
         model = os.environ.get("GPT4V_MODEL", "gpt-4o")
         temperature = float(os.environ.get("GPT4V_TEMPERATURE", "1.0"))
-        initialize_agent(model=model, temperature=temperature)
+        # Support screenshot_a11y_tree mode via OSWORLD_OBS_TYPE env var
+        observation_type = os.environ.get("OSWORLD_OBS_TYPE", "screenshot")
+        initialize_agent(model=model, temperature=temperature, observation_type=observation_type)
     except Exception as e:
         logger.error(f"Failed to initialize agent: {e}")
         logger.warning("Agent will need to be initialized via API call")
@@ -188,6 +196,7 @@ def handle_task(task: A2ATask) -> A2AMessage:
         observation = _parse_observation(task)
         instruction = observation["instruction"]
         screenshot_bytes = observation["screenshot"]
+        accessibility_tree = observation.get("accessibility_tree")  # XML string or None
         is_done = observation.get("done", False)
 
         # Store instruction on first step
@@ -195,6 +204,8 @@ def handle_task(task: A2ATask) -> A2AMessage:
             context["instruction"] = instruction
 
         logger.info(f"Step {step}: Processing observation for task '{instruction[:80]}...'")
+        if accessibility_tree:
+            logger.info(f"Accessibility tree included ({len(accessibility_tree)} chars)")
 
     except Exception as e:
         error_msg = f"Failed to parse observation: {e}"
@@ -211,9 +222,13 @@ def handle_task(task: A2ATask) -> A2AMessage:
     # Get action from GPT-4V
     try:
         logger.info(f"Calling GPT-4V PromptAgent...")
+        # Build observation dict for PromptAgent
+        obs_for_agent = {"screenshot": screenshot_bytes}
+        if accessibility_tree:
+            obs_for_agent["accessibility_tree"] = accessibility_tree
         response, actions_str = agent.predict(
             instruction,
-            {"screenshot": screenshot_bytes}
+            obs_for_agent
         )
 
         logger.info(f"GPT-4V response: {response[:150]}..." if len(response) > 150 else f"GPT-4V response: {response}")
@@ -295,12 +310,18 @@ def _parse_observation(task: A2ATask) -> Dict[str, Any]:
 
     screenshot_bytes = base64.b64decode(image_b64)
 
-    return {
+    result = {
         "frame_id": obs_data.get("frame_id", 0),
         "screenshot": screenshot_bytes,
         "instruction": obs_data.get("instruction", task.message),
         "done": obs_data.get("done", False)
     }
+
+    # Include accessibility tree if provided (XML string from OSWorld)
+    if "accessibility_tree" in obs_data and obs_data["accessibility_tree"]:
+        result["accessibility_tree"] = obs_data["accessibility_tree"]
+
+    return result
 
 
 def _parse_actions(actions_str: str) -> Dict[str, Any]:

@@ -746,6 +746,7 @@ def _build_osworld_tool_descriptions(vm_ip: str) -> list[Dict[str, Any]]:
         "type_text": (f"{osworld_base_url}/action", "POST"),
         "hotkey": (f"{osworld_base_url}/action", "POST"),
         "scroll": (f"{osworld_base_url}/action", "POST"),
+        "move": (f"{osworld_base_url}/action", "POST"),
         "wait": (None, "LOCAL")
     }
 
@@ -1059,6 +1060,50 @@ def _build_osworld_tool_descriptions(vm_ip: str) -> list[Dict[str, Any]]:
                 "category": "action",
                 "tags": ["keyboard", "hotkey", "shortcut"],
                 "complexity": "moderate",
+                "safety_level": "safe"
+            }
+        },
+        {
+            "name": "move",
+            "description": "Move the mouse cursor to a specific position. Useful for waking up screens from sleep or positioning before other actions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {
+                        "type": "integer",
+                        "description": "X coordinate (pixels from left edge)",
+                        "minimum": 0
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Y coordinate (pixels from top edge)",
+                        "minimum": 0
+                    }
+                },
+                "required": ["x", "y"]
+            },
+            "returns": {
+                "content_type": "application/json",
+                "schema": {"type": "object"},
+                "description": "Empty success response"
+            },
+            "examples": [
+                {
+                    "description": "Move mouse to center of screen",
+                    "input": {"x": 960, "y": 540},
+                    "output": {}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "x": {"validator": "integer", "bounds": {"min": 0, "max": 7680}},
+                    "y": {"validator": "integer", "bounds": {"min": 0, "max": 4320}}
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["mouse", "cursor", "positioning"],
+                "complexity": "simple",
                 "safety_level": "safe"
             }
         },
@@ -1914,6 +1959,16 @@ async def _execute_osworld_action(
             amount_safe = _validate_number(amount, "scroll amount", min_val=-10000, max_val=10000)
             # Convert to int for scroll
             python_code = f"import pyautogui\npyautogui.scroll({int(amount_safe)})"
+
+        elif op == "move":
+            # Move mouse action - validate coordinates
+            x = args.get("x")
+            y = args.get("y")
+            if x is not None and y is not None:
+                x_safe, y_safe = _validate_coordinates(x, y)
+                python_code = f"import pyautogui\npyautogui.moveTo({x_safe}, {y_safe})"
+            else:
+                raise ValueError("move requires x and y coordinates")
 
         elif op == "execute_python":
             # Execute Python code directly

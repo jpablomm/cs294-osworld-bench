@@ -113,16 +113,18 @@ class OSWorldClient:
         response.raise_for_status()
         return response.json()
 
-    def get_accessibility_tree(self) -> Dict[str, Any]:
+    def get_accessibility_tree(self) -> str:
         """
         Get UI element tree (windows, buttons, text fields, etc.).
 
         Returns:
-            Accessibility tree as nested dictionary
+            Accessibility tree as XML string (compatible with OSWorld PromptAgent)
         """
         response = self._session.get(f"{self.base_url}/accessibility")
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        # OSWorld server returns {"AT": "<xml string>"}, extract the XML
+        return data.get("AT", "")
 
     def get_cursor_position(self) -> tuple[int, int]:
         """
@@ -309,7 +311,7 @@ class OSWorldObservation:
     def __init__(
         self,
         screenshot_b64: str,
-        accessibility_tree: Optional[Dict[str, Any]] = None,
+        accessibility_tree: Optional[str] = None,  # XML string from OSWorld
         cursor_position: Optional[tuple[int, int]] = None,
         screen_size: Optional[Dict[str, int]] = None,
     ):

@@ -21,6 +21,7 @@ if str(vendor_path) not in sys.path:
 try:
     from desktop_env.evaluators import metrics, getters
     from desktop_env.controllers.setup import SetupController
+    from desktop_env.controllers.python import PythonController
 except ImportError as e:
     logger.error(f"Failed to import OSWorld evaluators: {e}")
     logger.error("Make sure vendor/OSWorld is properly set up")
@@ -67,11 +68,27 @@ class MinimalEnv:
             client_password="password"  # Default for GCP VMs
         )
 
+        # Python controller for getters that need env.controller
+        # (e.g., get_accessibility_tree, get_terminal_output, get_file, etc.)
+        self._controller = PythonController(
+            vm_ip=vm_ip,
+            server_port=server_port
+        )
+
     @property
     def controller(self):
-        """Some getters might access env.controller"""
-        # Return a minimal object if needed
-        return None
+        """Controller for OSWorld getters (get_accessibility_tree, get_file, etc.)"""
+        return self._controller
+
+    @property
+    def vm_platform(self):
+        """Get VM platform (Linux, Windows, Darwin) from controller"""
+        return self._controller.get_vm_platform()
+
+    @property
+    def vm_screen_size(self):
+        """Get VM screen size from controller"""
+        return self._controller.get_vm_screen_size()
 
 
 def parse_evaluator_config(evaluator: Dict[str, Any]) -> Dict[str, Any]:
@@ -213,7 +230,7 @@ def evaluate_task(
     if parsed["postconfig"]:
         logger.info(f"Running postconfig with {len(parsed['postconfig'])} steps...")
         try:
-            success = env.setup_controller.setup(parsed["postconfig"], enable_proxy=False)
+            success = env.setup_controller.setup(parsed["postconfig"], use_proxy=False)
             if not success:
                 logger.warning("Postconfig setup failed, continuing with evaluation anyway")
         except Exception as e:

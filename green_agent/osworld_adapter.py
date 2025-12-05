@@ -213,6 +213,9 @@ def run_osworld_native(
                 "instruction": task.get("instruction", ""),
                 "done": False,
             }
+            # Include accessibility tree if available (for screenshot_a11y_tree mode)
+            if obs_obj.accessibility_tree:
+                obs_for_white["accessibility_tree"] = obs_obj.accessibility_tree
 
             # Get action from white agent
             try:
