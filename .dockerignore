@@ -64,9 +64,10 @@ temp/
 # Cloud Build
 cloudbuild*.yaml
 
-# Scripts (but allow run.sh which is needed by Dockerfile)
+# Scripts (but allow run scripts needed by Dockerfiles)
 *.sh
 !run.sh
+!run-white-agent.sh
 !webui-next/**/*.sh
 
 # Supabase local files
