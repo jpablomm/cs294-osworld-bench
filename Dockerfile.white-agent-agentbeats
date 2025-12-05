@@ -1,0 +1,52 @@
+# Dockerfile for White Agent with AgentBeats Controller
+# This is specifically for AgentBeats platform testing and registration
+# Uses earthshaker controller with Procfile
+
+FROM python:3.13-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (minimal for white agent)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements-white-agent-agentbeats.txt .
+
+# Install Python dependencies (includes earthshaker)
+RUN pip install --no-cache-dir -r requirements-white-agent-agentbeats.txt
+
+# Copy application code
+COPY white_agent/ white_agent/
+COPY run-white-agent.sh run.sh
+COPY Procfile.white-agent Procfile
+
+# Copy OSWorld vendor code (only mm_agents module is needed for PromptAgent)
+COPY vendor/OSWorld/mm_agents/ vendor/OSWorld/mm_agents/
+
+# Make run script executable
+RUN chmod +x run.sh
+
+# Set environment variables for AgentBeats compatibility
+ENV HOST=0.0.0.0
+ENV AGENT_PORT=8080
+ENV PYTHONUNBUFFERED=1
+
+# Set PYTHONPATH so controller subprocess can find modules
+ENV PYTHONPATH=/app:/app/vendor/OSWorld
+
+# Cloud Run provides PORT environment variable
+ENV PORT=8080
+
+# Expose port
+EXPOSE 8080
+
+# Health check - check controller status
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/status || exit 1
+
+# Use AgentBeats controller via Procfile
+CMD ["sh", "-c", "agentbeats run_ctrl"]

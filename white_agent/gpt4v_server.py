@@ -42,7 +42,7 @@ agent: PromptAgent = None
 conversation_contexts: Dict[str, Dict[str, Any]] = {}
 
 
-# A2A Protocol Models
+# A2A Protocol Models (following A2A SDK: a2a.types)
 class A2ATask(BaseModel):
     """A2A Task Model"""
     task_id: str
@@ -61,14 +61,46 @@ class A2AMessage(BaseModel):
     metadata: Dict[str, Any] | None = None
 
 
-class AgentCard(BaseModel):
-    """Agent Card for self-description"""
+class AgentSkill(BaseModel):
+    """A2A Skill definition - matches a2a.types.AgentSkill"""
+    id: str
     name: str
-    version: str
     description: str
-    protocols: list[str]
-    capabilities: list[str]
-    metadata: Dict[str, Any] | None = None
+    tags: list[str]
+    inputModes: list[str] | None = None
+    outputModes: list[str] | None = None
+
+
+class AgentProvider(BaseModel):
+    """A2A Provider definition - matches a2a.types.AgentProvider"""
+    organization: str
+    url: str
+
+
+class AgentCapabilities(BaseModel):
+    """A2A Capability flags - matches a2a.types.AgentCapabilities"""
+    streaming: bool | None = None
+    pushNotifications: bool | None = None
+    stateTransitionHistory: bool | None = None
+    extensions: list | None = None
+
+
+class AgentCard(BaseModel):
+    """Agent Card following A2A SDK schema (a2a.types.AgentCard)"""
+    # Required fields
+    name: str
+    description: str
+    url: str
+    version: str
+    capabilities: AgentCapabilities
+    defaultInputModes: list[str]
+    defaultOutputModes: list[str]
+    skills: list[AgentSkill]
+    # Optional fields
+    documentationUrl: str | None = None
+    provider: AgentProvider | None = None
+    protocolVersion: str | None = "0.3.0"
+    preferredTransport: str | None = "JSONRPC"
 
 
 def initialize_agent(model: str = "gpt-4o", temperature: float = 1.0, observation_type: str = "screenshot"):
@@ -125,29 +157,81 @@ def health():
     }
 
 
+def _build_agent_url() -> str:
+    """Build agent URL from environment variables"""
+    cloudrun_host = os.getenv("CLOUDRUN_HOST")
+    https_enabled = os.getenv("HTTPS_ENABLED", "").lower() in ("true", "1", "yes")
+
+    if cloudrun_host:
+        protocol = "https" if https_enabled else "http"
+        return f"{protocol}://{cloudrun_host}"
+    else:
+        host = os.getenv("AGENT_HOST", os.getenv("HOST", "0.0.0.0"))
+        port = os.getenv("PORT", os.getenv("AGENT_PORT", "8080"))
+        protocol = "https" if https_enabled else "http"
+        return f"{protocol}://{host}:{port}"
+
+
+def _build_agent_card() -> AgentCard:
+    """Build A2A-compliant agent card"""
+    return AgentCard(
+        name="GPT-4V OSWorld Task Executor",
+        description=(
+            "White agent for executing desktop automation tasks using GPT-4V vision-language model. "
+            "Receives observations (screenshots, instructions) and returns actions "
+            "(clicks, typing, navigation) for OSWorld assessment workflows."
+        ),
+        url=_build_agent_url(),
+        version="1.0.0",
+        capabilities=AgentCapabilities(
+            streaming=False,
+            pushNotifications=False,
+            stateTransitionHistory=True
+        ),
+        defaultInputModes=["application/json"],
+        defaultOutputModes=["application/json"],
+        skills=[
+            AgentSkill(
+                id="desktop-automation",
+                name="Desktop Automation",
+                description="Execute desktop automation actions (click, type, hotkey, scroll)",
+                tags=["automation", "desktop", "gui", "osworld"]
+            ),
+            AgentSkill(
+                id="vision-reasoning",
+                name="Vision-Language Reasoning",
+                description="Analyze screenshots and determine appropriate actions using GPT-4V",
+                tags=["vision", "gpt-4v", "reasoning", "screenshot"]
+            ),
+            AgentSkill(
+                id="task-execution",
+                name="Task Execution",
+                description="Execute multi-step tasks by observing screen state and taking actions",
+                tags=["task", "execution", "multi-step"]
+            )
+        ],
+        provider=AgentProvider(
+            organization="Berkeley CS294",
+            url="https://github.com/agentbeats/green-agent"
+        ),
+        documentationUrl="https://github.com/agentbeats/green-agent"
+    )
+
+
 @app.get("/agent-card")
 def get_agent_card() -> AgentCard:
     """Return agent card describing capabilities"""
-    return AgentCard(
-        name="GPT-4V OSWorld Task Executor",
-        version="1.0.0",
-        description="Vision-language model for desktop automation using OSWorld",
-        protocols=["a2a", "rest"],
-        capabilities=[
-            "desktop-automation",
-            "vision-language-reasoning",
-            "screen-observation",
-            "mouse-control",
-            "keyboard-control",
-            "task-execution",
-            "gpt-4v-powered"
-        ],
-        metadata={
-            "model": os.environ.get("GPT4V_MODEL", "gpt-4o"),
-            "action_space": "pyautogui",
-            "observation_type": "screenshot"
-        }
-    )
+    return _build_agent_card()
+
+
+@app.get("/.well-known/agent-card.json")
+def get_well_known_agent_card() -> AgentCard:
+    """
+    A2A standard discovery endpoint.
+    This is the standardized endpoint that AgentBeats platform uses
+    to discover and verify agent capabilities.
+    """
+    return _build_agent_card()
 
 
 @app.post("/task")
