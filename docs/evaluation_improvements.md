@@ -10,7 +10,7 @@ The original OSWorld evaluation is binary and outcome-focused: it checks if the 
 - Minor text variations (case, whitespace) cause false negatives
 - No visibility into agent behavior patterns or failure modes
 
-We implemented three improvements to address these gaps.
+We implemented four improvements to address these gaps.
 
 ---
 
@@ -152,6 +152,143 @@ Automatic warnings are generated for:
 - High screenshot ratio (>50%) - may indicate confusion
 - Action loops detected - agent may be stuck
 - High error rate (>30%) - tool execution issues
+
+---
+
+## 4. LLM-as-Judge Fallback
+
+### Problem
+Rule-based evaluation can produce false negatives: the agent successfully completes a task, but the programmatic check fails due to:
+- Timing issues (state not yet settled)
+- UI variations (element positions shifted)
+- Overly strict matching criteria
+- Edge cases not covered by the evaluator
+
+Research (AgentRewardBench) shows that rule-based evaluations often **underreport** agent success rates.
+
+### Solution
+When rule-based evaluation returns 0.0, invoke a vision LLM to analyze screenshots and determine if the task was actually completed:
+
+```
+Rule-based eval = 0.0
+        ↓
+Collect evidence (screenshots, actions, task instruction)
+        ↓
+Send to GPT-4o / Claude with structured prompt
+        ↓
+LLM returns: {success, confidence, reasoning}
+        ↓
+If confidence ≥ threshold → Override score
+```
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│              evaluate_task_with_llm_fallback()   │
+├─────────────────────────────────────────────────┤
+│  1. Run rule-based evaluation                    │
+│         ↓                                        │
+│     score > 0.0? → Return score                  │
+│         ↓                                        │
+│  2. Collect evidence                             │
+│     - Screenshot before (initial state)          │
+│     - Screenshot after (final state)             │
+│     - Action sequence                            │
+│     - Agent's reasoning                          │
+│         ↓                                        │
+│  3. Call vision LLM with evaluation prompt       │
+│         ↓                                        │
+│  4. Parse response, check confidence threshold   │
+│         ↓                                        │
+│  5. Override or confirm rule-based result        │
+└─────────────────────────────────────────────────┘
+```
+
+### Configuration
+
+```python
+# Enable via assessment config
+config = {
+    "enable_llm_fallback": True,
+    "llm_judge_provider": "openai",      # or "anthropic"
+    "llm_judge_model": "gpt-4o",         # optional, uses provider default
+    "llm_judge_confidence": 0.7,         # minimum confidence to trust LLM
+}
+```
+
+### LLM Response Format
+
+The LLM returns a structured JSON response:
+
+```json
+{
+  "success": true,
+  "confidence": 0.85,
+  "reasoning": "The final screenshot shows a 'Projects' folder on the desktop. The agent clicked on the desktop, right-clicked to open context menu, selected 'New Folder', and typed the name. Despite the rule-based check failing (possibly due to icon position), the task goal was achieved.",
+  "evidence_used": ["screenshot_after", "action_sequence"]
+}
+```
+
+### Evaluation Methods
+
+The `evaluation_method` field in results indicates how the score was determined:
+
+| Method | Description |
+|--------|-------------|
+| `rule_based` | Standard programmatic evaluation |
+| `llm_judge_override` | LLM overrode rule-based failure (false negative caught) |
+| `rule_based_confirmed_by_llm` | LLM confirmed rule-based failure |
+| `rule_based_llm_uncertain` | LLM confidence below threshold |
+| `rule_based_llm_failed` | LLM call failed, kept rule-based result |
+
+### Cost Analysis
+
+| Component | Tokens | Cost (GPT-4o) |
+|-----------|--------|---------------|
+| Prompt + task | ~500 | $0.00125 |
+| 2 screenshots (low-res) | ~1700 | $0.00425 |
+| Response | ~200 | $0.002 |
+| **Total per LLM eval** | ~2400 | **~$0.008** |
+
+Assuming 30% of evaluations trigger fallback: **~$0.24 per 100 assessments**
+
+### Example: False Negative Caught
+
+```python
+# Rule-based evaluation failed (icon position different than expected)
+rule_based_score = 0.0
+
+# LLM analyzes screenshots
+llm_judgment = {
+    "success": True,
+    "confidence": 0.89,
+    "reasoning": "The 'Projects' folder is visible on the desktop in the final screenshot..."
+}
+
+# Final result
+{
+    "score": 1.0,  # Overridden!
+    "base_score": 0.0,
+    "evaluation_method": "llm_judge_override",
+    "evaluation_details": {
+        "llm_judgment": {
+            "success": True,
+            "confidence": 0.89,
+            "reasoning": "...",
+            "provider": "openai",
+            "model": "gpt-4o"
+        }
+    }
+}
+```
+
+### Supported Providers
+
+| Provider | Models | Notes |
+|----------|--------|-------|
+| OpenAI | gpt-4o, gpt-4o-mini | Best vision capabilities |
+| Anthropic | claude-sonnet-4-20250514 | Strong reasoning |
 
 ---
 

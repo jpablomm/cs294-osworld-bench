@@ -570,7 +570,7 @@ async def _execute_assessment(
             })
 
             try:
-                from green_agent.osworld_evaluator import evaluate_task
+                from green_agent.osworld_evaluator import evaluate_task_with_llm_fallback
 
                 # Extract last action from trajectory for infeasible task evaluation
                 last_action = None
@@ -590,50 +590,77 @@ async def _execute_assessment(
                         last_action = "DONE"
                     logger.info(f"Extracted last_action from trajectory: {last_action}")
 
-                # Run OSWorld evaluation with enhanced metrics
+                # Run OSWorld evaluation with enhanced metrics and LLM fallback
                 steps_taken = result.get("steps", 0)
                 trajectory = result.get("trajectory", [])
                 max_steps = config.get("max_steps", 15)
 
-                evaluation_result = await asyncio.to_thread(
-                    evaluate_task,
+                # Extract screenshots for LLM fallback
+                screenshot_before = result.get("screenshot_before")
+                screenshot_after = result.get("screenshot_after")
+
+                # LLM fallback configuration
+                enable_llm_fallback = config.get("enable_llm_fallback", False)
+                llm_provider = config.get("llm_judge_provider", "openai")
+                llm_model = config.get("llm_judge_model")  # None = use default
+                llm_confidence_threshold = config.get("llm_judge_confidence", 0.7)
+
+                if enable_llm_fallback:
+                    logger.info(f"LLM fallback enabled: provider={llm_provider}, "
+                               f"model={llm_model or 'default'}, threshold={llm_confidence_threshold}")
+
+                evaluation_result = await evaluate_task_with_llm_fallback(
                     vm_ip=vm_info["vm_ip"],
                     evaluator_config=osworld_task["evaluator"],
                     task_id=osworld_task.get("id", config["osworld_task_id"]),
+                    task_instruction=osworld_task.get("instruction", ""),
                     server_port=5000,
                     cache_dir="cache",
                     last_action=last_action,
                     steps_taken=steps_taken,
                     trajectory=trajectory,
-                    max_steps=max_steps
+                    max_steps=max_steps,
+                    # LLM fallback options
+                    enable_llm_fallback=enable_llm_fallback,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                    llm_confidence_threshold=llm_confidence_threshold,
+                    screenshot_before=screenshot_before,
+                    screenshot_after=screenshot_after
                 )
 
-                # Handle both simple (float) and enhanced (dict) results
-                if isinstance(evaluation_result, dict):
-                    evaluation_score = evaluation_result.get("score", 0.0)
-                    base_score = evaluation_result.get("base_score", evaluation_score)
-                    efficiency_data = evaluation_result.get("efficiency", {})
-                    trajectory_analysis = evaluation_result.get("trajectory_analysis", {})
+                # evaluation_result is always a dict from evaluate_task_with_llm_fallback
+                evaluation_score = evaluation_result.get("score", 0.0)
+                base_score = evaluation_result.get("base_score", evaluation_score)
+                efficiency_data = evaluation_result.get("efficiency", {})
+                trajectory_analysis = evaluation_result.get("trajectory_analysis", {})
+                eval_method = evaluation_result.get("evaluation_method", "rule_based")
+                llm_judgment = evaluation_result.get("llm_judgment")
 
-                    logger.info(f"OSWorld evaluation: base_score={base_score:.2f}, "
-                               f"efficiency_adjusted={evaluation_score:.2f}, "
-                               f"steps={steps_taken}")
+                logger.info(f"OSWorld evaluation: base_score={base_score:.2f}, "
+                           f"final_score={evaluation_score:.2f}, "
+                           f"method={eval_method}, steps={steps_taken}")
 
-                    # Store enhanced evaluation data
-                    result["evaluation_details"] = {
-                        "base_score": base_score,
-                        "adjusted_score": evaluation_score,
-                        "efficiency": efficiency_data,
-                        "trajectory_analysis": trajectory_analysis
-                    }
-                else:
-                    evaluation_score = float(evaluation_result)
-                    logger.info(f"OSWorld evaluation score: {evaluation_score}")
+                # Store enhanced evaluation data
+                result["evaluation_details"] = {
+                    "base_score": base_score,
+                    "adjusted_score": evaluation_score,
+                    "efficiency": efficiency_data,
+                    "trajectory_analysis": trajectory_analysis,
+                    "evaluation_method": eval_method
+                }
+
+                # Include LLM judgment if available
+                if llm_judgment:
+                    result["evaluation_details"]["llm_judgment"] = llm_judgment
+                    logger.info(f"LLM judgment: success={llm_judgment.get('success')}, "
+                               f"confidence={llm_judgment.get('confidence', 0):.2f}, "
+                               f"reasoning={llm_judgment.get('reasoning', '')[:100]}...")
 
                 # Update success based on evaluation (score >= 1.0 = success)
                 result["success"] = 1 if evaluation_score >= 1.0 else 0
                 result["evaluation_score"] = evaluation_score
-                result["evaluation_method"] = "osworld_benchmark_enhanced"
+                result["evaluation_method"] = eval_method
 
                 if result["success"] == 0 and "failure_reason" not in result:
                     result["failure_reason"] = f"evaluation_failed_score_{evaluation_score}"
@@ -644,9 +671,11 @@ async def _execute_assessment(
                     "timestamp": datetime.utcnow().isoformat(),
                     "success": result["success"] == 1,
                     "evaluation_score": evaluation_score,
-                    "base_score": result.get("evaluation_details", {}).get("base_score", evaluation_score),
-                    "efficiency_ratio": result.get("evaluation_details", {}).get("efficiency", {}).get("efficiency_ratio"),
-                    "message": f"Evaluation {'passed' if result['success'] == 1 else 'failed'} (score: {evaluation_score:.2f})"
+                    "base_score": base_score,
+                    "efficiency_ratio": efficiency_data.get("efficiency_ratio") if efficiency_data else None,
+                    "evaluation_method": eval_method,
+                    "llm_override": eval_method == "llm_judge_override",
+                    "message": f"Evaluation {'passed' if result['success'] == 1 else 'failed'} (score: {evaluation_score:.2f}, method: {eval_method})"
                 })
 
             except Exception as e:
@@ -1470,6 +1499,10 @@ async def _execute_with_white_agent(
             screenshot_resp = await client.get(f"{osworld_base_url}/screenshot")
             screenshot_b64 = base64.b64encode(screenshot_resp.content).decode()
 
+            # Store initial screenshot for LLM fallback evaluation
+            initial_screenshot_bytes = screenshot_resp.content
+            final_screenshot_bytes = None  # Will be updated during execution
+
             # Save initial screenshot
             Path(f"{artifacts_dir}/step_0_initial.png").write_bytes(screenshot_resp.content)
 
@@ -1722,6 +1755,9 @@ async def _execute_with_white_agent(
                 screenshot_resp = await client.get(f"{osworld_base_url}/screenshot")
                 screenshot_b64 = base64.b64encode(screenshot_resp.content).decode()
 
+                # Store as potential final screenshot for LLM fallback evaluation
+                final_screenshot_bytes = screenshot_resp.content
+
                 # Save screenshot
                 screenshot_after_path = f"{artifacts_dir}/step_{step + 1}.png"
                 Path(screenshot_after_path).write_bytes(screenshot_resp.content)
@@ -1777,12 +1813,19 @@ async def _execute_with_white_agent(
             failure_reason = str(e)
 
     # Build result
+    # Get screenshots if they were captured (they're defined in the try block)
+    screenshot_before = locals().get('initial_screenshot_bytes')
+    screenshot_after = locals().get('final_screenshot_bytes')
+
     result = {
         "success": success,
         "steps": step,
         "time_sec": time.time() - start_time,
         "trajectory": trajectory,
-        "artifacts_dir": artifacts_dir
+        "artifacts_dir": artifacts_dir,
+        # Screenshots for LLM fallback evaluation
+        "screenshot_before": screenshot_before,
+        "screenshot_after": screenshot_after
     }
 
     if failure_reason:

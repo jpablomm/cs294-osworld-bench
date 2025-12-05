@@ -755,3 +755,176 @@ def evaluate_task(
         except Exception as e:
             logger.error(f"Evaluation error: {e}", exc_info=True)
             return build_result(0.0)
+
+
+async def evaluate_task_with_llm_fallback(
+    vm_ip: str,
+    evaluator_config: Dict[str, Any],
+    task_id: str = "unknown",
+    task_instruction: str = "",
+    server_port: int = 5000,
+    cache_dir: str = "cache",
+    last_action: Optional[str] = None,
+    steps_taken: Optional[int] = None,
+    trajectory: Optional[List[Dict[str, Any]]] = None,
+    max_steps: int = 15,
+    expected_steps: Optional[int] = None,
+    # LLM fallback options
+    enable_llm_fallback: bool = False,
+    llm_provider: str = "openai",
+    llm_model: Optional[str] = None,
+    llm_confidence_threshold: float = 0.7,
+    screenshot_before: Optional[bytes] = None,
+    screenshot_after: Optional[bytes] = None
+) -> Dict[str, Any]:
+    """
+    Evaluate OSWorld task with optional LLM-as-Judge fallback.
+
+    This async function wraps evaluate_task() and adds LLM fallback
+    when rule-based evaluation returns 0.0.
+
+    Args:
+        vm_ip: VM IP address
+        evaluator_config: Evaluator dict from OSWorld task JSON
+        task_id: Task identifier
+        task_instruction: Human-readable task description (for LLM judge)
+        server_port: OSWorld server port
+        cache_dir: Base cache directory
+        last_action: Agent's final action ("FAIL", "DONE", or None)
+        steps_taken: Number of steps taken
+        trajectory: Full trajectory from orchestrator
+        max_steps: Maximum allowed steps
+        expected_steps: Expected steps for this task
+
+        enable_llm_fallback: Whether to use LLM when rule-based fails
+        llm_provider: LLM provider ("openai" or "anthropic")
+        llm_model: Model name (defaults to provider's best)
+        llm_confidence_threshold: Minimum confidence to trust LLM
+        screenshot_before: Initial screenshot PNG bytes
+        screenshot_after: Final screenshot PNG bytes
+
+    Returns:
+        Dict with evaluation results including:
+            - score: Final score
+            - base_score: Rule-based score
+            - evaluation_method: "rule_based", "llm_judge_fallback", etc.
+            - llm_judgment: LLM result (if fallback was used)
+    """
+    import asyncio
+
+    # Run rule-based evaluation in thread pool (it's synchronous)
+    rule_based_result = await asyncio.to_thread(
+        evaluate_task,
+        vm_ip=vm_ip,
+        evaluator_config=evaluator_config,
+        task_id=task_id,
+        server_port=server_port,
+        cache_dir=cache_dir,
+        last_action=last_action,
+        steps_taken=steps_taken,
+        trajectory=trajectory,
+        max_steps=max_steps,
+        expected_steps=expected_steps
+    )
+
+    # Normalize result to dict
+    if isinstance(rule_based_result, (int, float)):
+        result = {
+            "score": float(rule_based_result),
+            "base_score": float(rule_based_result),
+            "evaluation_method": "rule_based",
+            "task_id": task_id
+        }
+    else:
+        result = rule_based_result
+        result["evaluation_method"] = "rule_based"
+
+    rule_based_score = result.get("base_score", result.get("score", 0.0))
+
+    # Check if we should invoke LLM fallback
+    should_use_llm = (
+        enable_llm_fallback and
+        rule_based_score == 0.0 and
+        (screenshot_before is not None or screenshot_after is not None)
+    )
+
+    if not should_use_llm:
+        return result
+
+    # Invoke LLM-as-Judge fallback
+    logger.info("Rule-based evaluation returned 0.0, invoking LLM-as-Judge fallback")
+
+    try:
+        from green_agent.llm_judge import EvaluationEvidence, llm_judge_evaluation
+
+        # Extract action sequence from trajectory
+        action_sequence = []
+        agent_reasoning = None
+        if trajectory:
+            for entry in trajectory:
+                action = entry.get("action", {})
+                op = action.get("op", "unknown")
+                args = action.get("args", {})
+
+                # Format action nicely
+                if op == "click" and "x" in args and "y" in args:
+                    action_sequence.append(f"click({args['x']}, {args['y']})")
+                elif op == "type" and "text" in args:
+                    action_sequence.append(f"type('{args['text'][:50]}...')" if len(args.get('text', '')) > 50 else f"type('{args.get('text', '')}')")
+                elif op == "hotkey" and "keys" in args:
+                    action_sequence.append(f"hotkey({', '.join(args['keys'])})")
+                elif op == "scroll" and "amount" in args:
+                    action_sequence.append(f"scroll({args['amount']})")
+                else:
+                    action_sequence.append(op)
+
+            # Get last agent reasoning
+            if trajectory:
+                last_entry = trajectory[-1]
+                agent_reasoning = last_entry.get("content", "")
+
+        # Build evidence
+        evidence = EvaluationEvidence(
+            task_instruction=task_instruction,
+            screenshot_before=screenshot_before,
+            screenshot_after=screenshot_after,
+            action_sequence=action_sequence,
+            agent_reasoning=agent_reasoning,
+            rule_based_score=rule_based_score,
+            rule_based_error=result.get("failure_reason")
+        )
+
+        # Call LLM judge
+        llm_result = await llm_judge_evaluation(
+            evidence=evidence,
+            provider=llm_provider,
+            model=llm_model,
+            confidence_threshold=llm_confidence_threshold
+        )
+
+        logger.info(f"LLM judge result: success={llm_result.get('success')}, "
+                   f"confidence={llm_result.get('confidence'):.2f}")
+
+        # Store LLM judgment in result
+        result["llm_judgment"] = llm_result
+
+        # Check if we should override the rule-based result
+        if llm_result.get("meets_threshold", False):
+            if llm_result.get("success", False):
+                logger.info("LLM judge overrides: marking as SUCCESS")
+                result["score"] = 1.0
+                result["evaluation_method"] = "llm_judge_override"
+            else:
+                logger.info("LLM judge confirms: keeping as FAILURE")
+                result["evaluation_method"] = "rule_based_confirmed_by_llm"
+        else:
+            logger.info(f"LLM confidence ({llm_result.get('confidence'):.2f}) below threshold "
+                       f"({llm_confidence_threshold}), keeping rule-based result")
+            result["evaluation_method"] = "rule_based_llm_uncertain"
+
+    except Exception as e:
+        logger.error(f"LLM fallback failed: {e}", exc_info=True)
+        result["llm_fallback_error"] = str(e)
+        result["evaluation_method"] = "rule_based_llm_failed"
+
+    return result
