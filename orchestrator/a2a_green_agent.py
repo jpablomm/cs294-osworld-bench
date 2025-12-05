@@ -590,23 +590,50 @@ async def _execute_assessment(
                         last_action = "DONE"
                     logger.info(f"Extracted last_action from trajectory: {last_action}")
 
-                # Run OSWorld evaluation
-                evaluation_score = await asyncio.to_thread(
+                # Run OSWorld evaluation with enhanced metrics
+                steps_taken = result.get("steps", 0)
+                trajectory = result.get("trajectory", [])
+                max_steps = config.get("max_steps", 15)
+
+                evaluation_result = await asyncio.to_thread(
                     evaluate_task,
                     vm_ip=vm_info["vm_ip"],
                     evaluator_config=osworld_task["evaluator"],
                     task_id=osworld_task.get("id", config["osworld_task_id"]),
                     server_port=5000,
                     cache_dir="cache",
-                    last_action=last_action
+                    last_action=last_action,
+                    steps_taken=steps_taken,
+                    trajectory=trajectory,
+                    max_steps=max_steps
                 )
 
-                logger.info(f"OSWorld evaluation score: {evaluation_score}")
+                # Handle both simple (float) and enhanced (dict) results
+                if isinstance(evaluation_result, dict):
+                    evaluation_score = evaluation_result.get("score", 0.0)
+                    base_score = evaluation_result.get("base_score", evaluation_score)
+                    efficiency_data = evaluation_result.get("efficiency", {})
+                    trajectory_analysis = evaluation_result.get("trajectory_analysis", {})
+
+                    logger.info(f"OSWorld evaluation: base_score={base_score:.2f}, "
+                               f"efficiency_adjusted={evaluation_score:.2f}, "
+                               f"steps={steps_taken}")
+
+                    # Store enhanced evaluation data
+                    result["evaluation_details"] = {
+                        "base_score": base_score,
+                        "adjusted_score": evaluation_score,
+                        "efficiency": efficiency_data,
+                        "trajectory_analysis": trajectory_analysis
+                    }
+                else:
+                    evaluation_score = float(evaluation_result)
+                    logger.info(f"OSWorld evaluation score: {evaluation_score}")
 
                 # Update success based on evaluation (score >= 1.0 = success)
                 result["success"] = 1 if evaluation_score >= 1.0 else 0
                 result["evaluation_score"] = evaluation_score
-                result["evaluation_method"] = "osworld_benchmark"
+                result["evaluation_method"] = "osworld_benchmark_enhanced"
 
                 if result["success"] == 0 and "failure_reason" not in result:
                     result["failure_reason"] = f"evaluation_failed_score_{evaluation_score}"
@@ -617,7 +644,9 @@ async def _execute_assessment(
                     "timestamp": datetime.utcnow().isoformat(),
                     "success": result["success"] == 1,
                     "evaluation_score": evaluation_score,
-                    "message": f"Evaluation {'passed' if result['success'] == 1 else 'failed'} (score: {evaluation_score})"
+                    "base_score": result.get("evaluation_details", {}).get("base_score", evaluation_score),
+                    "efficiency_ratio": result.get("evaluation_details", {}).get("efficiency", {}).get("efficiency_ratio"),
+                    "message": f"Evaluation {'passed' if result['success'] == 1 else 'failed'} (score: {evaluation_score:.2f})"
                 })
 
             except Exception as e:

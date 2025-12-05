@@ -3,15 +3,352 @@ OSWorld Evaluation Module
 
 Integrates OSWorld's complete evaluation system (getters + metrics)
 to properly validate task success/failure according to benchmark criteria.
+
+Enhanced with:
+- Efficiency-adjusted scoring (penalizes inefficient solutions)
+- Tolerant matching (reduces false negatives from minor variations)
+- Trajectory analysis (extracts insights from agent behavior)
 """
 
 import logging
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Dict, Any, List, Union, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Quick Win 1: Efficiency-Adjusted Scoring
+# =============================================================================
+
+def calculate_efficiency_score(
+    base_score: float,
+    steps_taken: int,
+    expected_steps: Optional[int] = None,
+    max_steps: int = 15,
+    efficiency_weight: float = 0.2
+) -> Dict[str, Any]:
+    """
+    Calculate efficiency-adjusted score that penalizes inefficient solutions.
+
+    Args:
+        base_score: Original evaluation score (0.0 to 1.0)
+        steps_taken: How many steps the agent used
+        expected_steps: Baseline expected steps (if known from task metadata)
+        max_steps: Maximum allowed steps (used if expected_steps not provided)
+        efficiency_weight: How much efficiency affects final score (0.0 to 1.0)
+
+    Returns:
+        Dict with:
+            - adjusted_score: Final score incorporating efficiency
+            - base_score: Original correctness score
+            - efficiency_ratio: How efficient the agent was (1.0 = optimal)
+            - steps_taken: Number of steps used
+            - expected_steps: Baseline steps used for comparison
+    """
+    if base_score == 0.0:
+        return {
+            "adjusted_score": 0.0,
+            "base_score": 0.0,
+            "efficiency_ratio": 0.0,
+            "steps_taken": steps_taken,
+            "expected_steps": expected_steps or max_steps
+        }
+
+    # Use expected_steps if provided, otherwise use a heuristic
+    # Heuristic: expect task to be done in ~40% of max_steps for simple tasks
+    baseline = expected_steps if expected_steps else max(1, int(max_steps * 0.4))
+
+    # Efficiency ratio: 1.0 if at or under baseline, decreases as steps increase
+    if steps_taken <= baseline:
+        efficiency_ratio = 1.0
+    else:
+        # Gradual decay: at 2x baseline steps, efficiency is 0.5
+        efficiency_ratio = baseline / steps_taken
+
+    # Weighted combination
+    correctness_weight = 1.0 - efficiency_weight
+    adjusted_score = (correctness_weight * base_score) + (efficiency_weight * efficiency_ratio * base_score)
+
+    logger.info(f"Efficiency scoring: base={base_score:.2f}, steps={steps_taken}, "
+                f"baseline={baseline}, efficiency={efficiency_ratio:.2f}, adjusted={adjusted_score:.2f}")
+
+    return {
+        "adjusted_score": round(adjusted_score, 4),
+        "base_score": base_score,
+        "efficiency_ratio": round(efficiency_ratio, 4),
+        "steps_taken": steps_taken,
+        "expected_steps": baseline
+    }
+
+
+# =============================================================================
+# Quick Win 2: Tolerant Matching
+# =============================================================================
+
+def tolerant_match(
+    result: Any,
+    expected: Any,
+    threshold: float = 0.85,
+    ignore_case: bool = True,
+    ignore_whitespace: bool = True
+) -> Dict[str, Any]:
+    """
+    Flexible string matching that handles minor variations.
+
+    Tries exact match first (after normalization), then falls back to fuzzy matching.
+
+    Args:
+        result: Actual result from VM
+        expected: Expected value
+        threshold: Minimum similarity for fuzzy match (0.0 to 1.0)
+        ignore_case: Whether to ignore case differences
+        ignore_whitespace: Whether to normalize whitespace
+
+    Returns:
+        Dict with:
+            - score: Match score (0.0 to 1.0)
+            - match_type: "exact", "normalized", "fuzzy", or "no_match"
+            - similarity: Raw similarity score
+            - details: Additional match information
+    """
+    # Handle None/empty cases
+    if result is None:
+        return {
+            "score": 0.0,
+            "match_type": "no_match",
+            "similarity": 0.0,
+            "details": "Result is None"
+        }
+
+    # Convert to strings
+    result_str = str(result)
+    expected_str = str(expected)
+
+    # Check exact match first
+    if result_str == expected_str:
+        return {
+            "score": 1.0,
+            "match_type": "exact",
+            "similarity": 1.0,
+            "details": "Exact match"
+        }
+
+    # Normalize strings
+    def normalize(s: str) -> str:
+        normalized = s
+        if ignore_whitespace:
+            normalized = " ".join(normalized.split())
+        if ignore_case:
+            normalized = normalized.lower()
+        return normalized.strip()
+
+    result_norm = normalize(result_str)
+    expected_norm = normalize(expected_str)
+
+    # Check normalized match
+    if result_norm == expected_norm:
+        return {
+            "score": 1.0,
+            "match_type": "normalized",
+            "similarity": 1.0,
+            "details": f"Match after normalization (case={'ignored' if ignore_case else 'preserved'}, whitespace={'normalized' if ignore_whitespace else 'preserved'})"
+        }
+
+    # Fuzzy match using rapidfuzz (already available in OSWorld deps)
+    try:
+        from rapidfuzz import fuzz
+        similarity = fuzz.ratio(result_norm, expected_norm) / 100.0
+
+        if similarity >= threshold:
+            return {
+                "score": similarity,
+                "match_type": "fuzzy",
+                "similarity": similarity,
+                "details": f"Fuzzy match with {similarity:.1%} similarity (threshold: {threshold:.1%})"
+            }
+        else:
+            return {
+                "score": 0.0,
+                "match_type": "no_match",
+                "similarity": similarity,
+                "details": f"Similarity {similarity:.1%} below threshold {threshold:.1%}"
+            }
+    except ImportError:
+        logger.warning("rapidfuzz not available, falling back to exact match only")
+        return {
+            "score": 0.0,
+            "match_type": "no_match",
+            "similarity": 0.0,
+            "details": "Fuzzy matching unavailable"
+        }
+
+
+# =============================================================================
+# Quick Win 3: Trajectory Analysis
+# =============================================================================
+
+def analyze_trajectory(trajectory: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Extract insights from agent trajectory for debugging and analysis.
+
+    Args:
+        trajectory: List of trajectory entries from orchestrator, each containing:
+            - step: Step number
+            - action: Action dict with "op" and "args"
+            - content: Agent's reasoning/response
+            - message_data: Full message metadata
+            - tool_data: Tool execution details
+
+    Returns:
+        Dict with analysis results:
+            - total_steps: Number of steps taken
+            - action_counts: Counter of action types
+            - action_sequence: List of action ops in order
+            - unique_actions: Number of distinct action types used
+            - has_loops: Whether agent got stuck in repetitive patterns
+            - loop_details: Information about detected loops
+            - final_action: The last action taken
+            - screenshot_ratio: Proportion of screenshot actions (may indicate confusion)
+            - error_count: Number of failed tool executions
+            - avg_action_duration_ms: Average time per action (if available)
+    """
+    if not trajectory:
+        return {
+            "total_steps": 0,
+            "action_counts": {},
+            "action_sequence": [],
+            "unique_actions": 0,
+            "has_loops": False,
+            "loop_details": None,
+            "final_action": None,
+            "screenshot_ratio": 0.0,
+            "error_count": 0,
+            "avg_action_duration_ms": None,
+            "analysis_status": "empty_trajectory"
+        }
+
+    # Extract action sequence
+    actions = []
+    error_count = 0
+    durations = []
+
+    for entry in trajectory:
+        action = entry.get("action", {})
+        op = action.get("op", "unknown")
+        actions.append(op)
+
+        # Count errors
+        tool_data = entry.get("tool_data", {})
+        if tool_data and tool_data.get("status") == "failed":
+            error_count += 1
+
+        # Collect durations
+        if tool_data and "duration_ms" in tool_data:
+            durations.append(tool_data["duration_ms"])
+
+    action_counts = dict(Counter(actions))
+
+    # Detect loops (same action repeated 3+ times consecutively)
+    loops = _detect_action_loops(actions)
+
+    # Calculate screenshot ratio
+    screenshot_count = action_counts.get("screenshot", 0)
+    screenshot_ratio = screenshot_count / len(actions) if actions else 0.0
+
+    # Average duration
+    avg_duration = sum(durations) / len(durations) if durations else None
+
+    analysis = {
+        "total_steps": len(trajectory),
+        "action_counts": action_counts,
+        "action_sequence": actions,
+        "unique_actions": len(set(actions)),
+        "has_loops": len(loops) > 0,
+        "loop_details": loops if loops else None,
+        "final_action": actions[-1] if actions else None,
+        "screenshot_ratio": round(screenshot_ratio, 3),
+        "error_count": error_count,
+        "avg_action_duration_ms": round(avg_duration, 1) if avg_duration else None,
+        "analysis_status": "complete"
+    }
+
+    # Add warnings for potential issues
+    warnings = []
+    if screenshot_ratio > 0.5:
+        warnings.append("High screenshot ratio may indicate agent confusion")
+    if len(loops) > 0:
+        warnings.append(f"Detected {len(loops)} action loop(s)")
+    if error_count > len(trajectory) * 0.3:
+        warnings.append("High error rate in tool executions")
+
+    if warnings:
+        analysis["warnings"] = warnings
+
+    return analysis
+
+
+def _detect_action_loops(actions: List[str], min_loop_length: int = 3) -> List[Dict[str, Any]]:
+    """
+    Detect repetitive action patterns that may indicate the agent is stuck.
+
+    Args:
+        actions: List of action operation names
+        min_loop_length: Minimum consecutive repetitions to count as a loop
+
+    Returns:
+        List of detected loops with position and action info
+    """
+    loops = []
+    i = 0
+
+    while i < len(actions):
+        # Check for consecutive identical actions
+        j = i
+        while j < len(actions) and actions[j] == actions[i]:
+            j += 1
+
+        repeat_count = j - i
+        if repeat_count >= min_loop_length:
+            loops.append({
+                "action": actions[i],
+                "start_index": i,
+                "repeat_count": repeat_count,
+                "type": "consecutive_repeat"
+            })
+
+        i = j if j > i else i + 1
+
+    # Also detect short repeating patterns (e.g., click-screenshot-click-screenshot)
+    for pattern_len in [2, 3]:
+        for i in range(len(actions) - pattern_len * min_loop_length + 1):
+            pattern = tuple(actions[i:i + pattern_len])
+            repeat_count = 1
+
+            for j in range(i + pattern_len, len(actions) - pattern_len + 1, pattern_len):
+                if tuple(actions[j:j + pattern_len]) == pattern:
+                    repeat_count += 1
+                else:
+                    break
+
+            if repeat_count >= min_loop_length:
+                # Check if we already recorded this loop
+                already_recorded = any(
+                    loop["start_index"] == i and loop["type"] == "pattern_repeat"
+                    for loop in loops
+                )
+                if not already_recorded:
+                    loops.append({
+                        "pattern": list(pattern),
+                        "start_index": i,
+                        "repeat_count": repeat_count,
+                        "type": "pattern_repeat"
+                    })
+
+    return loops
 
 # Add vendor/OSWorld to path for imports
 vendor_path = Path(__file__).parent.parent / "vendor" / "OSWorld"
@@ -188,10 +525,17 @@ def evaluate_task(
     task_id: str = "unknown",
     server_port: int = 5000,
     cache_dir: str = "cache",
-    last_action: Optional[str] = None
-) -> float:
+    last_action: Optional[str] = None,
+    steps_taken: Optional[int] = None,
+    trajectory: Optional[List[Dict[str, Any]]] = None,
+    max_steps: int = 15,
+    expected_steps: Optional[int] = None
+) -> Union[float, Dict[str, Any]]:
     """
     Evaluate OSWorld task using configured getters and metrics.
+
+    Enhanced with efficiency scoring and trajectory analysis when additional
+    parameters are provided.
 
     Args:
         vm_ip: VM IP address
@@ -201,9 +545,18 @@ def evaluate_task(
         cache_dir: Base cache directory
         last_action: The agent's final action - "FAIL", "DONE", or None.
                      Used for infeasible task evaluation.
+        steps_taken: Number of steps the agent took (for efficiency scoring)
+        trajectory: Full trajectory from orchestrator (for analysis)
+        max_steps: Maximum allowed steps (for efficiency baseline)
+        expected_steps: Expected steps for this task (overrides heuristic)
 
     Returns:
-        Score from 0.0 (failure) to 1.0 (success)
+        If steps_taken or trajectory provided: Dict with detailed results
+            - score: Final score (0.0 to 1.0)
+            - base_score: Raw evaluation score before efficiency adjustment
+            - efficiency: Efficiency scoring details
+            - trajectory_analysis: Trajectory analysis (if trajectory provided)
+        Otherwise: float score (0.0 to 1.0) for backward compatibility
 
     Raises:
         ValueError: If evaluator config is invalid
@@ -211,6 +564,9 @@ def evaluate_task(
     """
     logger.info(f"Starting OSWorld evaluation for task {task_id}")
     logger.info(f"VM IP: {vm_ip}, Port: {server_port}")
+
+    # Determine if we should return enhanced results
+    return_enhanced = steps_taken is not None or trajectory is not None
 
     # Create minimal env object
     # Note: Use port 9222 because tasks use socat to forward 9222->1337
@@ -240,21 +596,50 @@ def evaluate_task(
             logger.error(f"Postconfig execution error: {e}")
             logger.warning("Continuing with evaluation despite postconfig failure")
 
+    # Helper to build result (handles both simple and enhanced returns)
+    def build_result(base_score: float) -> Union[float, Dict[str, Any]]:
+        if not return_enhanced:
+            return base_score
+
+        # Calculate efficiency score
+        actual_steps = steps_taken if steps_taken is not None else (
+            len(trajectory) if trajectory else 0
+        )
+        efficiency_data = calculate_efficiency_score(
+            base_score=base_score,
+            steps_taken=actual_steps,
+            expected_steps=expected_steps,
+            max_steps=max_steps
+        )
+
+        # Analyze trajectory if provided
+        trajectory_data = None
+        if trajectory:
+            trajectory_data = analyze_trajectory(trajectory)
+
+        return {
+            "score": efficiency_data["adjusted_score"],
+            "base_score": base_score,
+            "efficiency": efficiency_data,
+            "trajectory_analysis": trajectory_data,
+            "task_id": task_id
+        }
+
     # Handle special case: infeasible tasks
     # These are tasks that should be marked as FAIL by the agent
     if evaluator_config.get("func") == "infeasible":
         logger.info(f"Task is marked as infeasible - checking for FAIL signal (last_action={last_action})")
         if last_action == "FAIL":
             logger.info("Agent correctly identified task as infeasible - returning 1.0")
-            return 1.0
+            return build_result(1.0)
         else:
             logger.info("Agent did not identify task as infeasible - returning 0.0")
-            return 0.0
+            return build_result(0.0)
 
     # Handle normal tasks where agent incorrectly gave up
     if last_action == "FAIL":
         logger.info("Agent returned FAIL on a feasible task - returning 0.0")
-        return 0.0
+        return build_result(0.0)
 
     # Execute evaluation
     if parsed["is_list"]:
@@ -299,22 +684,22 @@ def evaluate_task(
                 # Early termination for conjunction
                 if parsed["conjunction"] == "and" and float(score) == 0.0:
                     logger.info("AND conjunction: metric failed, returning 0.0")
-                    return 0.0
+                    return build_result(0.0)
                 elif parsed["conjunction"] == "or" and float(score) == 1.0:
                     logger.info("OR conjunction: metric passed, returning 1.0")
-                    return 1.0
+                    return build_result(1.0)
 
                 results.append(float(score))
 
             except FileNotFoundError as e:
                 logger.error(f"Metric {idx+1}: File not found - {e}")
                 if parsed["conjunction"] == "and":
-                    return 0.0
+                    return build_result(0.0)
                 results.append(0.0)
             except Exception as e:
                 logger.error(f"Metric {idx+1} evaluation error: {e}", exc_info=True)
                 if parsed["conjunction"] == "and":
-                    return 0.0
+                    return build_result(0.0)
                 results.append(0.0)
 
         # Compute final score based on conjunction
@@ -324,7 +709,7 @@ def evaluate_task(
             final_score = max(results) if results else 0.0
 
         logger.info(f"Final evaluation score: {final_score}")
-        return final_score
+        return build_result(final_score)
 
     else:
         # Single metric
@@ -362,11 +747,11 @@ def evaluate_task(
 
             final_score = float(score)
             logger.info(f"Final evaluation score: {final_score}")
-            return final_score
+            return build_result(final_score)
 
         except FileNotFoundError as e:
             logger.error(f"File not found during evaluation: {e}")
-            return 0.0
+            return build_result(0.0)
         except Exception as e:
             logger.error(f"Evaluation error: {e}", exc_info=True)
-            return 0.0
+            return build_result(0.0)
