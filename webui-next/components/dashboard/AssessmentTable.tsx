@@ -11,8 +11,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { CheckCircle2, XCircle, Clock, ExternalLink } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, ExternalLink, Bot } from "lucide-react";
 import type { Assessment } from "@/lib/api/types";
+import type { EvaluationResult } from "@/lib/types";
 import { formatDistanceToNow } from "date-fns";
 
 interface AssessmentTableProps {
@@ -57,110 +58,121 @@ export function AssessmentTable({ assessments, isLoading }: AssessmentTableProps
           </TableRow>
         </TableHeader>
         <TableBody>
-          {assessments.map((assessment) => (
-            <TableRow key={assessment.id}>
-              {/* Status Icon */}
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  {assessment.status === "completed" && assessment.success ? (
-                    <CheckCircle2 className="h-4 w-4 text-success" />
-                  ) : assessment.status === "failed" ? (
-                    <XCircle className="h-4 w-4 text-destructive" />
-                  ) : (
-                    <Clock className="h-4 w-4 text-warning animate-pulse" />
-                  )}
-                  <Badge
-                    variant={
-                      assessment.status === "completed"
-                        ? "default"
-                        : assessment.status === "failed"
-                        ? "destructive"
-                        : "secondary"
-                    }
-                    className="text-xs"
-                  >
-                    {assessment.status}
+          {assessments.map((assessment) => {
+            // Check for LLM override
+            const evalResult = assessment.result as EvaluationResult | undefined;
+            const evaluationMethod = assessment.evaluation_method || evalResult?.evaluation_method;
+            const isLLMOverride = evaluationMethod === "llm_judge_override";
+
+            return (
+              <TableRow key={assessment.id}>
+                {/* Status Icon */}
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    {assessment.status === "completed" && assessment.success ? (
+                      <CheckCircle2 className="h-4 w-4 text-success" />
+                    ) : assessment.status === "failed" ? (
+                      <XCircle className="h-4 w-4 text-destructive" />
+                    ) : (
+                      <Clock className="h-4 w-4 text-warning animate-pulse" />
+                    )}
+                    <Badge
+                      variant={
+                        assessment.status === "completed"
+                          ? "default"
+                          : assessment.status === "failed"
+                          ? "destructive"
+                          : "secondary"
+                      }
+                      className="text-xs"
+                    >
+                      {assessment.status}
+                    </Badge>
+                  </div>
+                </TableCell>
+
+                {/* Task ID */}
+                <TableCell className="font-medium max-w-[200px]">
+                  <div className="truncate" title={assessment.task_id}>
+                    {assessment.task_id}
+                  </div>
+                </TableCell>
+
+                {/* Domain */}
+                <TableCell>
+                  <Badge variant="outline" className="text-xs">
+                    {assessment.domain || "N/A"}
                   </Badge>
-                </div>
-              </TableCell>
+                </TableCell>
 
-              {/* Task ID */}
-              <TableCell className="font-medium max-w-[200px]">
-                <div className="truncate" title={assessment.task_id}>
-                  {assessment.task_id}
-                </div>
-              </TableCell>
+                {/* Steps */}
+                <TableCell className="text-center">
+                  <span className="font-mono text-sm">{assessment.steps}</span>
+                </TableCell>
 
-              {/* Domain */}
-              <TableCell>
-                <Badge variant="outline" className="text-xs">
-                  {assessment.domain || "N/A"}
-                </Badge>
-              </TableCell>
-
-              {/* Steps */}
-              <TableCell className="text-center">
-                <span className="font-mono text-sm">{assessment.steps}</span>
-              </TableCell>
-
-              {/* Success */}
-              <TableCell className="text-center">
-                {assessment.status === "completed" ? (
-                  assessment.success ? (
-                    <CheckCircle2 className="h-4 w-4 text-success mx-auto" />
+                {/* Success */}
+                <TableCell className="text-center">
+                  {assessment.status === "completed" ? (
+                    <div className="flex items-center justify-center gap-1">
+                      {assessment.success ? (
+                        <CheckCircle2 className="h-4 w-4 text-success" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-destructive" />
+                      )}
+                      {isLLMOverride && (
+                        <Bot className="h-3 w-3 text-purple-400" title="LLM Judge Override" />
+                      )}
+                    </div>
                   ) : (
-                    <XCircle className="h-4 w-4 text-destructive mx-auto" />
-                  )
-                ) : (
-                  <span className="text-muted-foreground text-xs">—</span>
-                )}
-              </TableCell>
+                    <span className="text-muted-foreground text-xs">—</span>
+                  )}
+                </TableCell>
 
-              {/* Evaluation Score */}
-              <TableCell className="text-center">
-                {assessment.evaluation_score !== null &&
-                assessment.evaluation_score !== undefined ? (
-                  <span className="font-mono text-sm">
-                    {assessment.evaluation_score.toFixed(2)}
+                {/* Evaluation Score */}
+                <TableCell className="text-center">
+                  {assessment.evaluation_score !== null &&
+                  assessment.evaluation_score !== undefined ? (
+                    <span className="font-mono text-sm">
+                      {assessment.evaluation_score.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">—</span>
+                  )}
+                </TableCell>
+
+                {/* Time */}
+                <TableCell className="text-right">
+                  {assessment.time_sec ? (
+                    <span className="font-mono text-sm">
+                      {Math.round(assessment.time_sec)}s
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">—</span>
+                  )}
+                </TableCell>
+
+                {/* Started At */}
+                <TableCell className="text-right">
+                  <span className="text-xs text-muted-foreground">
+                    {assessment.started_at ? formatDistanceToNow(new Date(assessment.started_at), {
+                      addSuffix: true,
+                    }) : "—"}
                   </span>
-                ) : (
-                  <span className="text-muted-foreground text-xs">—</span>
-                )}
-              </TableCell>
+                </TableCell>
 
-              {/* Time */}
-              <TableCell className="text-right">
-                {assessment.time_sec ? (
-                  <span className="font-mono text-sm">
-                    {Math.round(assessment.time_sec)}s
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground text-xs">—</span>
-                )}
-              </TableCell>
-
-              {/* Started At */}
-              <TableCell className="text-right">
-                <span className="text-xs text-muted-foreground">
-                  {formatDistanceToNow(new Date(assessment.started_at), {
-                    addSuffix: true,
-                  })}
-                </span>
-              </TableCell>
-
-              {/* Actions */}
-              <TableCell className="text-right">
-                <Link href={`/assessment/${assessment.id}`}>
-                  <Button variant="ghost" size="sm">
-                    <ExternalLink className="h-4 w-4" />
-                  </Button>
-                </Link>
-              </TableCell>
-            </TableRow>
-          ))}
+                {/* Actions */}
+                <TableCell className="text-right">
+                  <Link href={`/assessment/${assessment.id}`}>
+                    <Button variant="ghost" size="sm">
+                      <ExternalLink className="h-4 w-4" />
+                    </Button>
+                  </Link>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </div>
   );
 }
-

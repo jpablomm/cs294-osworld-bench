@@ -17,7 +17,7 @@ import base64
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
-from fastapi import FastAPI, Header, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, Header, HTTPException, Depends, BackgroundTasks, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -40,15 +40,42 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# A2A Protocol Models (simplified implementation based on AgentBeats spec)
-class AgentCard(BaseModel):
-    """Agent self-description following A2A protocol"""
+# A2A Protocol Models (following A2A spec: https://agent2agent.info/docs/concepts/agentcard/)
+class AgentSkill(BaseModel):
+    """A2A Skill definition"""
+    id: str
     name: str
     description: str
+    tags: list[str] = []
+    inputModes: list[str] = ["application/json"]
+    outputModes: list[str] = ["application/json"]
+
+
+class AgentAuthentication(BaseModel):
+    """A2A Authentication requirements"""
+    schemes: list[str] = []
+
+
+class AgentCapabilities(BaseModel):
+    """A2A Capability flags"""
+    streaming: bool = False
+    pushNotifications: bool = False
+    stateTransitionHistory: bool = True
+
+
+class AgentCard(BaseModel):
+    """Agent self-description following A2A protocol spec"""
+    name: str
+    description: str
+    url: str
     version: str
-    capabilities: list[str]
-    protocols: list[str]
-    assessment_types: list[str]
+    defaultInputModes: list[str] = ["application/json"]
+    defaultOutputModes: list[str] = ["application/json"]
+    skills: list[AgentSkill] = []
+    authentication: AgentAuthentication = AgentAuthentication()
+    capabilities: AgentCapabilities = AgentCapabilities()
+    documentationUrl: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class A2ATask(BaseModel):
@@ -145,13 +172,17 @@ async def _push_event_to_webui(callback_url: Optional[str], event_data: Dict[str
         logger.debug(f"Failed to push event to WebUI: {e}")
 
 
-@app.get("/agent-card")
-def get_agent_card() -> AgentCard:
-    """
-    Return agent card - A2A protocol requirement
+def _build_agent_card(request_url: str = None) -> AgentCard:
+    """Build agent card with dynamic URL based on request or environment"""
+    # Try to determine the agent URL
+    if request_url:
+        agent_url = request_url.split("/.well-known")[0].split("/agent-card")[0]
+    else:
+        # Fallback to environment or default
+        host = os.getenv("AGENT_HOST", os.getenv("HOST", "0.0.0.0"))
+        port = os.getenv("PORT", os.getenv("AGENT_PORT", "8080"))
+        agent_url = f"http://{host}:{port}"
 
-    This describes the green agent's capabilities for AgentBeats platform
-    """
     return AgentCard(
         name="OSWorld Assessment Agent",
         description=(
@@ -159,36 +190,67 @@ def get_agent_card() -> AgentCard:
             "Creates VMs from golden images, orchestrates task execution with white agents, "
             "and reports standardized metrics (success rate, steps, execution time)."
         ),
+        url=agent_url,
         version="0.1.0",
-        capabilities=[
-            "osworld-benchmarks",
-            "desktop-automation-assessment",
-            "vm-orchestration",
-            "chrome-tasks",
-            "os-tasks",
-            "gnome-tasks"
+        provider="Berkeley CS294",
+        documentationUrl="https://github.com/agentbeats/green-agent",
+        defaultInputModes=["application/json"],
+        defaultOutputModes=["application/json"],
+        skills=[
+            AgentSkill(
+                id="osworld-assessment",
+                name="OSWorld Assessment",
+                description="Run OSWorld desktop automation benchmark assessments",
+                tags=["benchmark", "desktop", "automation", "assessment"],
+            ),
+            AgentSkill(
+                id="chrome-task",
+                name="Chrome Browser Tasks",
+                description="Execute Chrome browser automation tasks",
+                tags=["chrome", "browser", "web"],
+            ),
+            AgentSkill(
+                id="os-task",
+                name="OS-Level Tasks",
+                description="Execute operating system level tasks (file management, settings)",
+                tags=["os", "files", "settings", "gnome"],
+            ),
         ],
-        protocols=["a2a", "rest"],
-        assessment_types=[
-            "osworld-single-agent",  # One white agent performs desktop tasks
-            "osworld-chrome",        # Chrome-specific tasks
-            "osworld-os",           # OS-level tasks
-            "osworld-custom"        # Custom task definitions
-        ]
+        authentication=AgentAuthentication(
+            schemes=["bearer"] if GREEN_AGENT_API_KEY else []
+        ),
+        capabilities=AgentCapabilities(
+            streaming=False,
+            pushNotifications=True,
+            stateTransitionHistory=True
+        )
     )
 
 
+@app.get("/agent-card")
+def get_agent_card(request: Request) -> AgentCard:
+    """
+    Return agent card - A2A protocol requirement
+    """
+    return _build_agent_card(str(request.url))
+
+
+@app.get("/.well-known/agent.json")
+async def get_well_known_agent_json(request: Request) -> AgentCard:
+    """
+    A2A Protocol standard discovery endpoint.
+
+    Per A2A spec: https://agent2agent.info/docs/concepts/agentcard/
+    Agent cards should be hosted at: /.well-known/agent.json
+    """
+    return _build_agent_card(str(request.url))
+
+
+# Keep old endpoint for backwards compatibility
 @app.get("/.well-known/agent-card.json")
-async def get_well_known_agent_card() -> AgentCard:
-    """
-    AgentBeats standard discovery endpoint.
-
-    This is the standardized endpoint that AgentBeats platform uses
-    to discover and verify agent capabilities.
-
-    See: https://agentbeats.com/docs/agent-discovery
-    """
-    return get_agent_card()
+async def get_well_known_agent_card_legacy(request: Request) -> AgentCard:
+    """Legacy endpoint - redirects to standard A2A endpoint"""
+    return _build_agent_card(str(request.url))
 
 
 @app.post("/task", dependencies=[Depends(verify_api_key)])
