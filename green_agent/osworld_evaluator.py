@@ -187,7 +187,8 @@ def evaluate_task(
     evaluator_config: Dict[str, Any],
     task_id: str = "unknown",
     server_port: int = 5000,
-    cache_dir: str = "cache"
+    cache_dir: str = "cache",
+    last_action: Optional[str] = None
 ) -> float:
     """
     Evaluate OSWorld task using configured getters and metrics.
@@ -198,6 +199,8 @@ def evaluate_task(
         task_id: Task identifier (for cache directory)
         server_port: OSWorld server port (default 5000)
         cache_dir: Base cache directory
+        last_action: The agent's final action - "FAIL", "DONE", or None.
+                     Used for infeasible task evaluation.
 
     Returns:
         Score from 0.0 (failure) to 1.0 (success)
@@ -240,10 +243,17 @@ def evaluate_task(
     # Handle special case: infeasible tasks
     # These are tasks that should be marked as FAIL by the agent
     if evaluator_config.get("func") == "infeasible":
-        logger.info("Task is marked as infeasible - checking for FAIL signal")
-        # We don't track action history in our REST API mode
-        # Infeasible tasks would need to be handled differently
-        logger.warning("Infeasible task evaluation not fully supported in REST API mode")
+        logger.info(f"Task is marked as infeasible - checking for FAIL signal (last_action={last_action})")
+        if last_action == "FAIL":
+            logger.info("Agent correctly identified task as infeasible - returning 1.0")
+            return 1.0
+        else:
+            logger.info("Agent did not identify task as infeasible - returning 0.0")
+            return 0.0
+
+    # Handle normal tasks where agent incorrectly gave up
+    if last_action == "FAIL":
+        logger.info("Agent returned FAIL on a feasible task - returning 0.0")
         return 0.0
 
     # Execute evaluation

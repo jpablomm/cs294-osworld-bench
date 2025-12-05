@@ -572,6 +572,24 @@ async def _execute_assessment(
             try:
                 from green_agent.osworld_evaluator import evaluate_task
 
+                # Extract last action from trajectory for infeasible task evaluation
+                last_action = None
+                if result.get("trajectory"):
+                    last_entry = result["trajectory"][-1]
+                    raw_actions = (
+                        last_entry
+                        .get("message_data", {})
+                        .get("payload", {})
+                        .get("metadata", {})
+                        .get("raw_actions", "")
+                    )
+                    raw_actions_str = str(raw_actions).upper()
+                    if "FAIL" in raw_actions_str:
+                        last_action = "FAIL"
+                    elif "DONE" in raw_actions_str:
+                        last_action = "DONE"
+                    logger.info(f"Extracted last_action from trajectory: {last_action}")
+
                 # Run OSWorld evaluation
                 evaluation_score = await asyncio.to_thread(
                     evaluate_task,
@@ -579,7 +597,8 @@ async def _execute_assessment(
                     evaluator_config=osworld_task["evaluator"],
                     task_id=osworld_task.get("id", config["osworld_task_id"]),
                     server_port=5000,
-                    cache_dir="cache"
+                    cache_dir="cache",
+                    last_action=last_action
                 )
 
                 logger.info(f"OSWorld evaluation score: {evaluation_score}")
