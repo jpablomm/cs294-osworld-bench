@@ -33,8 +33,8 @@ from .storage import StorageManager
 from .task_executor import TaskExecutor
 from .supabase_storage import upload_screenshot
 
-# Import OSWorld SetupController
-from desktop_env.controllers.setup import SetupController
+# SetupController is imported lazily in _execute_osworld_setup to speed up startup
+# from desktop_env.controllers.setup import SetupController
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -377,6 +377,9 @@ def _execute_osworld_setup(vm_ip: str, task_config: list) -> bool:
     Raises:
         Exception if setup fails
     """
+    # Lazy import to speed up module startup (heavy dependencies in OSWorld)
+    from desktop_env.controllers.setup import SetupController
+
     logger.info(f"Executing OSWorld task setup...")
 
     try:
