@@ -1,6 +1,6 @@
 #!/bin/bash
-# White Agent - A2A Protocol Runner (for AgentBeats)
-# This script is called by earthshaker controller
+# White Agent - A2A Protocol Runner
+# For use with AgentBeats earthshaker controller
 
 export PYTHONPATH="${PYTHONPATH:-/app:/app/vendor/OSWorld}"
 export PYTHONUNBUFFERED=1

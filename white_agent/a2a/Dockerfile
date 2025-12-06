@@ -1,6 +1,5 @@
 # White Agent - A2A Protocol (AgentBeats-compliant)
 # Uses earthshaker controller with a2a SDK
-# See white_agent/a2a/ for the implementation
 
 FROM python:3.13-slim
 

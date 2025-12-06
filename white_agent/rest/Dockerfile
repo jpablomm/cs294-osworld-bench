@@ -1,6 +1,5 @@
 # White Agent - REST API
 # FastAPI-based server for custom orchestrator integration
-# See white_agent/rest/ for the implementation
 
 FROM python:3.12-slim
 
