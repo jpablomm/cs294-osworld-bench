@@ -181,8 +181,6 @@ class TaskExecutor:
         # Temporarily set environment variable for run_osworld
         old_url = os.environ.get("OSWORLD_SERVER_URL")
         os.environ["OSWORLD_SERVER_URL"] = osworld_server_url
-        os.environ["USE_NATIVE_OSWORLD"] = "1"
-        os.environ["USE_FAKE_OSWORLD"] = "0"
 
         try:
             logger.info("Starting OSWorld execution...")

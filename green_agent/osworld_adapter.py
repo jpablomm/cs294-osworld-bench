@@ -1,6 +1,6 @@
 import os, time, base64, io, logging
-from typing import Dict, Any, Generator, Optional
-from PIL import Image, ImageDraw, ImageFont
+from typing import Dict, Any, Optional
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -12,84 +12,20 @@ except ImportError:
     logger.warning("GCS storage module not available - screenshots will only be saved locally")
     GCS_AVAILABLE = False
 
-USE_FAKE = os.environ.get("USE_FAKE_OSWORLD", "1") == "1"
+# OSWorld configuration
 OSWORLD_SERVER_URL = os.environ.get("OSWORLD_SERVER_URL", "http://localhost:5000")
-MAX_STEPS = int(os.environ.get("MAX_STEPS", 120))
-MAX_TIME = int(os.environ.get("MAX_TIME_SEC", 600))
-W = int(os.environ.get("DESKTOP_W", 1920))
-H = int(os.environ.get("DESKTOP_H", 1080))
-OSWORLD_OBS_TYPE = os.environ.get("OSWORLD_OBS_TYPE", "screenshot")
-OSWORLD_MAX_STEPS = int(
-    os.environ.get("OSWORLD_MAX_STEPS", os.environ.get("MAX_STEPS", 15))
-)
+OSWORLD_OBS_TYPE = os.environ.get("OSWORLD_OBS_TYPE", "screenshot_a11y_tree")
+OSWORLD_MAX_STEPS = int(os.environ.get("OSWORLD_MAX_STEPS", os.environ.get("MAX_STEPS", 15)))
 OSWORLD_SLEEP_AFTER_EXEC = int(os.environ.get("OSWORLD_SLEEP_AFTER_EXECUTION", 3))
 
 
-# --- Fake runner simulates an OS desktop and task progression ---
 def _png_b64(img: Image.Image) -> str:
+    """Convert PIL Image to base64-encoded PNG string."""
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _fake_frames(hints: list[str]) -> Generator[Dict[str, Any], None, None]:
-    steps = min(10, MAX_STEPS)
-    for i in range(1, steps + 1):
-        img = Image.new("RGB", (W, H), (240, 242, 245))
-        drw = ImageDraw.Draw(img)
-        drw.rectangle([(40, H - 120), (300, H - 40)], outline=(30, 30, 30), width=3)
-        drw.text((60, H - 110), "Writer", fill=(10, 10, 10))
-        drw.text((40, 40), f"Step {i}", fill=(0, 0, 0))
-        hint = hints[min(i - 1, len(hints) - 1)] if hints else None
-        yield {"frame_id": i, "png": _png_b64(img), "hint": hint, "done": i == steps}
-
-
-def run_osworld_like(
-    task: Dict[str, Any], white_decide, artifacts_dir: str | None = None
-) -> Dict[str, Any]:
-    """Fake OSWorld loop: emit frames, ask white agent for actions, mark success at the end."""
-    t0 = time.time()
-    steps = 0
-    failure = None
-    frames_dir = None
-    if artifacts_dir:
-        frames_dir = os.path.join(artifacts_dir, "frames")
-        os.makedirs(frames_dir, exist_ok=True)
-    for fr in _fake_frames(task.get("hints", [])):
-        obs = {
-            "frame_id": fr["frame_id"],
-            "image_png_b64": fr["png"],
-            "ui_hint": fr.get("hint"),
-            "done": False,
-        }
-        # Save frame artifact if requested
-        if frames_dir:
-            try:
-                with open(
-                    os.path.join(frames_dir, f"{fr['frame_id']:04d}.png"), "wb"
-                ) as fh:
-                    fh.write(base64.b64decode(fr["png"]))
-            except Exception:
-                # Artifacts are best-effort in MVP
-                pass
-        try:
-            _ = white_decide(obs)  # we ignore the action in fake mode
-        except Exception as e:
-            failure = f"white_decide_error: {e}"
-            break
-        steps += 1
-    done = failure is None
-    dt = time.time() - t0
-    return {
-        "success": 1 if done else 0,
-        "steps": steps,
-        "time_sec": round(dt, 3),
-        "failure_reason": failure,
-        "artifacts": {},
-    }
-
-
-# --- Native OSWorld adapter (REST API) ---
 def run_osworld_native(
     task: Dict[str, Any],
     white_decide,
@@ -334,7 +270,7 @@ def run_osworld(
 
     Args:
         task: Task dictionary (Green Agent format)
-        white_decide: Callback function (unused in native mode, kept for compatibility)
+        white_decide: Callback function (unused, kept for compatibility)
         artifacts_dir: Directory to save artifacts
         white_agent_url: URL of White Agent HTTP API
         osworld_task: Full OSWorld task config with evaluator (optional)
@@ -343,10 +279,4 @@ def run_osworld(
     Returns:
         Dictionary with assessment results
     """
-    if USE_FAKE:
-        logger.info("Using FAKE OSWorld mode")
-        return run_osworld_like(task, white_decide, artifacts_dir)
-
-    # Native mode (REST API to VM) - production mode
-    logger.info("Using NATIVE OSWorld mode (REST API)")
     return run_osworld_native(task, white_decide, artifacts_dir, white_agent_url, osworld_task, assessment_id)
