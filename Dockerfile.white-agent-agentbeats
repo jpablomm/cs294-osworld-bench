@@ -1,22 +1,23 @@
 # Dockerfile for White Agent with AgentBeats Controller
 # This is specifically for AgentBeats platform testing and registration
-# Uses earthshaker controller with Procfile
+# Uses earthshaker controller with Procfile and a2a SDK
 
 FROM python:3.13-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (minimal for white agent)
+# Install system dependencies (matching green agent setup)
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
 COPY requirements-white-agent-agentbeats.txt .
 
-# Install Python dependencies (includes earthshaker)
+# Install Python dependencies (includes earthshaker and a2a SDK)
 RUN pip install --no-cache-dir -r requirements-white-agent-agentbeats.txt
 
 # Copy application code
@@ -32,13 +33,13 @@ RUN chmod +x run.sh
 
 # Set environment variables for AgentBeats compatibility
 ENV HOST=0.0.0.0
-ENV AGENT_PORT=8080
 ENV PYTHONUNBUFFERED=1
 
-# Set PYTHONPATH so controller subprocess can find modules
+# CRITICAL: Set PYTHONPATH so controller subprocess can find OSWorld modules
 ENV PYTHONPATH=/app:/app/vendor/OSWorld
 
 # Cloud Run provides PORT environment variable
+# Controller uses this; agent subprocess gets AGENT_PORT from earthshaker
 ENV PORT=8080
 
 # Expose port
@@ -49,4 +50,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:${PORT}/status || exit 1
 
 # Use AgentBeats controller via Procfile
+# The controller will:
+# 1. Read run.sh script
+# 2. Start the white agent on a dynamic internal port (AGENT_PORT)
+# 3. Set AGENT_URL for proper agent card URL
+# 4. Proxy all requests to the agent
+# 5. Provide management UI at /docs, /status, /agents
 CMD ["sh", "-c", "agentbeats run_ctrl"]

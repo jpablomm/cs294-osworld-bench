@@ -23,7 +23,8 @@ load_dotenv()
 # Add vendor/OSWorld to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "vendor" / "OSWorld"))
 
-from mm_agents.agent import PromptAgent
+# PromptAgent is imported lazily in initialize_agent() to avoid
+# OpenAI client initialization hanging in subprocess context
 
 # Configure logging
 logging.basicConfig(
@@ -35,8 +36,8 @@ logger = logging.getLogger(__name__)
 # FastAPI app
 app = FastAPI(title="GPT-4V White Agent with A2A")
 
-# Global PromptAgent instance
-agent: PromptAgent = None
+# Global PromptAgent instance (type hint removed to avoid import)
+agent = None
 
 # Conversation contexts (task_id -> context)
 conversation_contexts: Dict[str, Dict[str, Any]] = {}
@@ -117,6 +118,9 @@ def initialize_agent(model: str = "gpt-4o", temperature: float = 1.0, observatio
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable not set")
 
+    # Lazy import to avoid OpenAI client initialization hanging in subprocess context
+    from mm_agents.agent import PromptAgent
+
     logger.info(f"Initializing PromptAgent with model={model}, temperature={temperature}, observation_type={observation_type}")
     agent = PromptAgent(
         model=model,
@@ -131,16 +135,14 @@ def initialize_agent(model: str = "gpt-4o", temperature: float = 1.0, observatio
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize agent on startup"""
-    try:
-        model = os.environ.get("GPT4V_MODEL", "gpt-4o")
-        temperature = float(os.environ.get("GPT4V_TEMPERATURE", "1.0"))
-        # Support screenshot_a11y_tree mode via OSWORLD_OBS_TYPE env var
-        observation_type = os.environ.get("OSWORLD_OBS_TYPE", "screenshot")
-        initialize_agent(model=model, temperature=temperature, observation_type=observation_type)
-    except Exception as e:
-        logger.error(f"Failed to initialize agent: {e}")
-        logger.warning("Agent will need to be initialized via API call")
+    """
+    Startup event - intentionally does NOT initialize agent here.
+
+    Agent initialization is deferred to first request to avoid blocking
+    the subprocess startup in earthshaker/AgentBeats context. OpenAI client
+    initialization can hang in subprocess environments.
+    """
+    logger.info("White Agent server starting (agent will initialize on first request)")
 
 
 @app.get("/health")
@@ -149,6 +151,20 @@ def health():
     agent_ready = agent is not None
     return {
         "status": "healthy" if agent_ready else "initializing",
+        "agent_type": "white",
+        "protocol": "a2a",
+        "model": "gpt-4v",
+        "agent_ready": agent_ready,
+        "active_contexts": len(conversation_contexts)
+    }
+
+
+@app.get("/status")
+def status():
+    """Status endpoint for AgentBeats controller"""
+    agent_ready = agent is not None
+    return {
+        "status": "running" if agent_ready else "initializing",
         "agent_type": "white",
         "protocol": "a2a",
         "model": "gpt-4v",
@@ -234,6 +250,20 @@ def get_well_known_agent_card() -> AgentCard:
     return _build_agent_card()
 
 
+def _ensure_agent_initialized():
+    """Lazily initialize agent on first use"""
+    global agent
+    if agent is None:
+        try:
+            model = os.environ.get("GPT4V_MODEL", "gpt-4o")
+            temperature = float(os.environ.get("GPT4V_TEMPERATURE", "1.0"))
+            observation_type = os.environ.get("OSWORLD_OBS_TYPE", "screenshot")
+            initialize_agent(model=model, temperature=temperature, observation_type=observation_type)
+        except Exception as e:
+            logger.error(f"Failed to initialize agent: {e}")
+            raise
+
+
 @app.post("/task")
 def handle_task(task: A2ATask) -> A2AMessage:
     """
@@ -250,6 +280,19 @@ def handle_task(task: A2ATask) -> A2AMessage:
         "osworld_server": str  # Optional - OSWorld server URL
     }
     """
+    # Lazy initialization on first request
+    try:
+        _ensure_agent_initialized()
+    except Exception as e:
+        return A2AMessage(
+            message_id=str(uuid.uuid4()),
+            task_id=task.task_id,
+            context_id=task.context_id or task.task_id,
+            role="agent",
+            content=f"Agent initialization failed: {e}",
+            metadata={"status": "error", "error": "agent_init_failed"}
+        )
+
     if not agent:
         return A2AMessage(
             message_id=str(uuid.uuid4()),

@@ -1,9 +1,11 @@
 # White Agent (GPT-4V) with AgentBeats Controller
 # Cloud Run optimized requirements with earthshaker
+# Uses a2a SDK for proper AgentBeats compliance
 
-# Core web framework
+# Core web framework (starlette needed for A2AStarletteApplication)
 fastapi==0.121.1
 uvicorn==0.30.6
+starlette>=0.27.0
 pydantic==2.11.7
 python-multipart==0.0.19
 httpx==0.28.1
@@ -13,9 +15,11 @@ Pillow==10.4.0
 
 # Python utilities
 python-dotenv==1.2.1
+pydantic-settings>=2.0.0
 
-# A2A protocol
-a2a==0.43
+# A2A protocol SDK (includes server components)
+# Note: a2a-sdk is the correct package, not "a2a" which is something else
+a2a-sdk[http-server]>=0.3.8
 
 # AgentBeats controller
 earthshaker==0.2.1
