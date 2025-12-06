@@ -24,7 +24,6 @@ RUN pip install --no-cache-dir -r requirements-cloudrun.txt
 # Copy application code
 COPY green_agent/ green_agent/
 COPY white_agent/ white_agent/
-COPY tasks/ tasks/
 
 # Copy run script and Procfile for earthshaker
 COPY green_agent/a2a/run.sh run.sh

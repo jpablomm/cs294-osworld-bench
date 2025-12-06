@@ -24,7 +24,6 @@ RUN pip install --no-cache-dir -r requirements-cloudrun.txt
 COPY orchestrator/ orchestrator/
 COPY green_agent/ green_agent/
 COPY white_agent/ white_agent/
-COPY tasks/ tasks/
 COPY vendor/ vendor/
 
 # Set environment variables

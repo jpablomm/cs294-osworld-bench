@@ -1,9 +1,0 @@
-{
-  "task_id": "5ea617a3-0e86-4ba6-aab2-dac9aa2e8d57",
-  "instruction": "I am currently using an Ubuntu system, and I have wrongly deleted a poster of party night. Could you help me recover it from the Trash?",
-  "description": "OSWorld OS task: Recover a deleted file from Ubuntu Trash",
-  "constraints": {
-    "max_steps": 15,
-    "max_time_sec": 300
-  }
-}

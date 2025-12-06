@@ -1,9 +1,0 @@
-{
-  "task_id": "5812b315-e7bd-4265-b51f-863c02174c28",
-  "instruction": "Please create an SSH user named \"charles\" with password \"Ex@mpleP@55w0rd!\" on Ubuntu who is only allowed to access the folder \"/home/test1\".",
-  "description": "OSWorld OS task: Create SSH user with restricted folder access",
-  "constraints": {
-    "max_steps": 20,
-    "max_time_sec": 600
-  }
-}

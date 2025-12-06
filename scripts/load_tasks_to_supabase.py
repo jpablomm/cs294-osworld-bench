@@ -20,7 +20,7 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # Path to OSWorld examples
-EXAMPLES_DIR = Path(__file__).parent.parent / "vendor" / "OSWorld" / "evaluation_examples" / "examples"
+EXAMPLES_DIR = Path(__file__).parent.parent / "green_agent" / "tasks_config"
 
 def load_tasks():
     """Load all tasks from OSWorld examples directory"""

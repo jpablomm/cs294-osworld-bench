@@ -51,7 +51,6 @@ RUN pip install --no-cache-dir -r requirements-webui.txt
 
 # Copy Python backend code
 COPY orchestrator/ orchestrator/
-COPY tasks/ tasks/
 
 # Copy built Next.js app from frontend builder
 COPY --from=frontend-builder /app/webui-next/.next /app/webui-next/.next

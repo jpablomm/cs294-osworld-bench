@@ -32,9 +32,9 @@ class TaskExecutor:
         if not self.tasks_dir.exists():
             logger.warning(f"Tasks directory does not exist: {self.tasks_dir}")
 
-        # Default to vendor/OSWorld/evaluation_examples/examples
+        # Default to green_agent/tasks_config
         if osworld_examples_dir is None:
-            osworld_examples_dir = Path(__file__).parent.parent / "vendor" / "OSWorld" / "evaluation_examples" / "examples"
+            osworld_examples_dir = Path(__file__).parent.parent / "tasks_config"
         self.osworld_examples_dir = Path(osworld_examples_dir)
         if not self.osworld_examples_dir.exists():
             logger.warning(f"OSWorld examples directory does not exist: {self.osworld_examples_dir}")

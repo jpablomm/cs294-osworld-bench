@@ -24,7 +24,6 @@ RUN pip install --no-cache-dir -r requirements-cloudrun.txt
 # Copy application code
 COPY green_agent/ green_agent/
 COPY white_agent/ white_agent/
-COPY tasks/ tasks/
 
 # Copy OSWorld vendor code (needed for desktop_env imports)
 COPY vendor/ vendor/
