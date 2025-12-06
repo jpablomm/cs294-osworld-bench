@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "vendor" / "OSWorld
 
 # All orchestrator imports are done lazily to avoid blocking subprocess startup
 # GCP and Supabase clients can hang during import in Cloud Run subprocesses
-# VMManager, StorageManager, TaskExecutor, upload_screenshot are imported in getter functions
+# VMManager, TaskExecutor, upload_screenshot are imported in getter functions
 
 # SetupController is imported lazily in _execute_osworld_setup to speed up startup
 
@@ -110,7 +110,6 @@ app = FastAPI(
 # Lazy initialization of managers to avoid blocking subprocess startup
 # GCP API calls and Supabase clients can hang during import in Cloud Run subprocesses
 _vm_manager = None
-_storage_manager = None
 _task_executor = None
 
 def get_vm_manager():
@@ -123,14 +122,6 @@ def get_vm_manager():
         _vm_manager = VMManager(project_id=gcp_project)
         logger.info(f"VMManager initialized with project_id: {_vm_manager.project_id}")
     return _vm_manager
-
-def get_storage_manager():
-    """Lazily initialize StorageManager on first use"""
-    global _storage_manager
-    if _storage_manager is None:
-        from .storage import StorageManager
-        _storage_manager = StorageManager(use_gcs=False)
-    return _storage_manager
 
 def get_task_executor():
     """Lazily initialize TaskExecutor on first use"""
