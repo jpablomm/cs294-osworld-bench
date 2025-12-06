@@ -14,6 +14,8 @@ import os
 import time
 import uuid
 import base64
+import signal
+import atexit
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -138,6 +140,72 @@ def get_upload_screenshot():
 
 # Track active assessments
 active_assessments: Dict[str, Dict[str, Any]] = {}
+
+# Flag to prevent duplicate cleanup during shutdown
+_is_shutting_down = False
+
+
+def _cleanup_all_vms():
+    """
+    Cleanup all running VMs on shutdown.
+
+    This prevents orphaned VMs which waste cloud resources.
+    Called by signal handlers and atexit.
+    """
+    global _is_shutting_down
+
+    if _is_shutting_down:
+        return  # Already cleaning up
+    _is_shutting_down = True
+
+    running_assessments = [
+        (aid, data) for aid, data in active_assessments.items()
+        if data.get("status") == "running"
+    ]
+
+    if not running_assessments:
+        logger.info("No running assessments to cleanup")
+        return
+
+    logger.warning(f"Cleaning up {len(running_assessments)} running assessment(s)...")
+
+    for assessment_id, data in running_assessments:
+        try:
+            logger.info(f"Deleting VM for assessment {assessment_id}...")
+            get_vm_manager().delete_vm(assessment_id)
+            logger.info(f"VM for assessment {assessment_id} deleted successfully")
+        except Exception as e:
+            logger.error(f"Failed to cleanup VM for {assessment_id}: {e}")
+
+
+def _signal_handler(signum, frame):
+    """
+    Handle SIGINT (Ctrl+C) and SIGTERM signals gracefully.
+
+    Ensures VMs are cleaned up before exit to prevent orphaned resources.
+    """
+    sig_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
+    logger.warning(f"Received {sig_name} signal - initiating graceful shutdown...")
+
+    _cleanup_all_vms()
+
+    logger.info("Graceful shutdown complete. Exiting.")
+    sys.exit(0)
+
+
+# Register signal handlers for graceful shutdown
+# Note: These may not work in all environments (e.g., some WSGI servers)
+# but will work when running directly with uvicorn
+try:
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+    logger.info("Registered signal handlers for graceful shutdown")
+except Exception as e:
+    logger.warning(f"Could not register signal handlers: {e}")
+
+# Register atexit handler as fallback
+atexit.register(_cleanup_all_vms)
+
 
 # WebUI server configuration for real-time event pushing
 WEBUI_SERVER_URL = os.getenv("WEBUI_SERVER_URL", "http://localhost:3001")
@@ -592,6 +660,21 @@ async def _execute_assessment(
                     "timestamp": datetime.utcnow().isoformat(),
                     "message": "OSWorld task setup completed successfully"
                 })
+
+                # Wait for environment to stabilize after setup
+                # OSWorld runners use 60s, but we use 30s as a balance
+                stabilization_wait = int(os.getenv("SETUP_STABILIZATION_WAIT", "30"))
+                if stabilization_wait > 0:
+                    logger.info(f"Waiting {stabilization_wait}s for environment to stabilize after setup...")
+                    await _push_event_to_webui(callback_url, {
+                        "type": "stabilization_wait",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "duration_sec": stabilization_wait,
+                        "message": f"Waiting {stabilization_wait}s for environment to stabilize"
+                    })
+                    await asyncio.sleep(stabilization_wait)
+                    logger.info("Stabilization wait complete")
+
             except Exception as e:
                 logger.error(f"Setup phase failed: {e}")
                 raise
@@ -658,6 +741,13 @@ async def _execute_assessment(
 
         # Step 4: Evaluate task success using OSWorld evaluation system
         if osworld_task and "evaluator" in osworld_task:
+            # Wait for environment to settle before evaluation
+            # OSWorld runners use 20s to let UI animations complete
+            eval_wait = int(os.getenv("EVAL_STABILIZATION_WAIT", "10"))
+            if eval_wait > 0:
+                logger.info(f"Waiting {eval_wait}s for environment to settle before evaluation...")
+                await asyncio.sleep(eval_wait)
+
             logger.info("Running OSWorld evaluation...")
 
             # Educational event: Evaluation started
