@@ -8,7 +8,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from orchestrator.database_postgres import PostgresDatabase
+from green_agent.a2a.database_postgres import PostgresDatabase
 import uuid
 from datetime import datetime
 
@@ -177,7 +177,7 @@ def run_all_tests():
     print("\nYour PostgreSQL database is ready to use.")
     print("To switch to PostgreSQL mode:")
     print("  export USE_POSTGRES=1")
-    print("  uvicorn orchestrator.webui_server:app --port 3001")
+    print("  uvicorn green_agent.a2a.webui_server:app --port 3001")
 
 if __name__ == "__main__":
     run_all_tests()

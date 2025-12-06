@@ -1,7 +1,6 @@
 # Green Agent - A2A Protocol (direct, no earthshaker)
 # Deploys A2A-compliant green agent to Cloud Run
-# See green_agent/a2a/ for the A2A protocol wrapper
-# See orchestrator/a2a_green_agent.py for the full implementation
+# See green_agent/a2a/ for the full implementation
 
 FROM python:3.13-slim
 
@@ -23,7 +22,6 @@ COPY requirements-cloudrun.txt .
 RUN pip install --no-cache-dir -r requirements-cloudrun.txt
 
 # Copy application code
-COPY orchestrator/ orchestrator/
 COPY green_agent/ green_agent/
 COPY white_agent/ white_agent/
 COPY tasks/ tasks/
@@ -43,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Run the A2A green agent directly
-CMD ["sh", "-c", "uvicorn orchestrator.a2a_green_agent:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]
+CMD ["sh", "-c", "uvicorn green_agent.a2a.server:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]

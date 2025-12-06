@@ -180,7 +180,7 @@ async def main():
     """)
 
     print("\nThis demo requires both agents to be running:")
-    print("  Terminal 1: uvicorn orchestrator.a2a_green_agent:app --port 8001")
+    print("  Terminal 1: uvicorn green_agent.a2a.server:app --port 8001")
     print("  Terminal 2: uvicorn white_agent.a2a_adapter:app --port 9001")
 
     input("\nPress Enter to continue...")

@@ -12,7 +12,7 @@ echo "HOST: $HOST" >&2
 echo "AGENT_PORT: $AGENT_PORT" >&2
 
 # Use stdbuf to force line-buffered output
-stdbuf -oL -eL python3 -u -m uvicorn orchestrator.a2a_green_agent:app \
+stdbuf -oL -eL python3 -u -m uvicorn green_agent.a2a.server:app \
     --host "$HOST" \
     --port "$AGENT_PORT" \
     --log-level info 2>&1

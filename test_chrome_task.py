@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from green_agent.white_client import WhiteClient
 from green_agent.osworld_adapter import run_osworld
-from orchestrator.task_executor import TaskExecutor
+from green_agent.a2a.task_executor import TaskExecutor
 
 logging.basicConfig(
     level=logging.INFO,

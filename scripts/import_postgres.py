@@ -9,7 +9,7 @@ from pathlib import Path
 # Add parent directory to path to import orchestrator module
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from orchestrator.database_postgres import PostgresDatabase
+from green_agent.a2a.database_postgres import PostgresDatabase
 
 def import_json_to_postgres(json_path: str, dry_run: bool = False):
     """Import JSON data to PostgreSQL"""

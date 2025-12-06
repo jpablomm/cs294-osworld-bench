@@ -10,7 +10,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from orchestrator.a2a_green_agent import (
+from green_agent.a2a.server import (
     _validate_coordinates,
     _validate_text,
     _validate_keys,

@@ -41,7 +41,7 @@ if [ $? -eq 0 ]; then
     echo "========================================="
 
     # Start the green agent
-    exec uvicorn orchestrator.a2a_green_agent:app --host $HOST --port $AGENT_PORT
+    exec uvicorn green_agent.a2a.server:app --host $HOST --port $AGENT_PORT
 else
     echo "✗ Import test failed!"
     echo "Agent will not start. Check logs above for errors."

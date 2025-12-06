@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 # Import GCS storage (gracefully handle missing module)
 try:
-    from orchestrator.gcs_storage import get_gcs_storage
+    from green_agent.a2a.gcs_storage import get_gcs_storage
     GCS_AVAILABLE = True
 except ImportError:
     logger.warning("GCS storage module not available - screenshots will only be saved locally")

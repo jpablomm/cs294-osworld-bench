@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from green_agent.osworld_evaluator import evaluate_task
-from orchestrator.task_executor import TaskExecutor
+from green_agent.a2a.task_executor import TaskExecutor
 
 logging.basicConfig(
     level=logging.INFO,

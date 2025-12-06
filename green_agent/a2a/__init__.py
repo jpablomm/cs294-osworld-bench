@@ -2,8 +2,15 @@
 """
 AgentBeats-compliant A2A protocol server for OSWorld assessments.
 Uses VM orchestration for cloud deployment.
+
+Components:
+- server.py: Main A2A FastAPI server
+- vm_manager.py: GCP VM lifecycle management
+- task_executor.py: OSWorld task execution
+- storage.py: GCS storage for artifacts
+- supabase_storage.py: Supabase storage for screenshots
 """
 
-from orchestrator.a2a_green_agent import app
+from .server import app
 
 __all__ = ["app"]

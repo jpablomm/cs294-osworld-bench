@@ -17,7 +17,7 @@ echo "========================================"
 # Start FastAPI backend in background
 echo "Starting FastAPI backend on port ${BACKEND_PORT}..."
 cd /app
-python3 -m uvicorn orchestrator.webui_server:app \
+python3 -m uvicorn green_agent.a2a.webui_server:app \
   --host 0.0.0.0 \
   --port ${BACKEND_PORT} \
   --log-level info &

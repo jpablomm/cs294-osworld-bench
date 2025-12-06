@@ -25,7 +25,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Add OSWorld to path for SetupController
-sys.path.insert(0, str(Path(__file__).parent.parent / "vendor" / "OSWorld"))
+# Path: green_agent/a2a/server.py -> ../../vendor/OSWorld
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "vendor" / "OSWorld"))
 
 # All orchestrator imports are done lazily to avoid blocking subprocess startup
 # GCP and Supabase clients can hang during import in Cloud Run subprocesses

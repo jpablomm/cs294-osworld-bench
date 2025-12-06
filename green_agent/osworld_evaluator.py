@@ -568,35 +568,8 @@ def evaluate_task(
     # Determine if we should return enhanced results
     return_enhanced = steps_taken is not None or trajectory is not None
 
-    # Create minimal env object
-    # Note: Use port 9222 because tasks use socat to forward 9222->1337
-    env = MinimalEnv(
-        vm_ip=vm_ip,
-        server_port=server_port,
-        chromium_port=9222,
-        cache_dir=cache_dir,
-        task_id=task_id
-    )
-
-    # Parse evaluator configuration
-    try:
-        parsed = parse_evaluator_config(evaluator_config)
-    except Exception as e:
-        logger.error(f"Failed to parse evaluator config: {e}")
-        raise
-
-    # Run postconfig (setup steps that run BEFORE evaluation)
-    if parsed["postconfig"]:
-        logger.info(f"Running postconfig with {len(parsed['postconfig'])} steps...")
-        try:
-            success = env.setup_controller.setup(parsed["postconfig"], use_proxy=False)
-            if not success:
-                logger.warning("Postconfig setup failed, continuing with evaluation anyway")
-        except Exception as e:
-            logger.error(f"Postconfig execution error: {e}")
-            logger.warning("Continuing with evaluation despite postconfig failure")
-
     # Helper to build result (handles both simple and enhanced returns)
+    # Defined early so it can be used for infeasible tasks before MinimalEnv is created
     def build_result(base_score: float) -> Union[float, Dict[str, Any]]:
         if not return_enhanced:
             return base_score
@@ -625,8 +598,9 @@ def evaluate_task(
             "task_id": task_id
         }
 
-    # Handle special case: infeasible tasks
+    # Handle special case: infeasible tasks BEFORE parsing evaluator config
     # These are tasks that should be marked as FAIL by the agent
+    # Must check this first because "infeasible" is not a real metric function
     if evaluator_config.get("func") == "infeasible":
         logger.info(f"Task is marked as infeasible - checking for FAIL signal (last_action={last_action})")
         if last_action == "FAIL":
@@ -635,6 +609,34 @@ def evaluate_task(
         else:
             logger.info("Agent did not identify task as infeasible - returning 0.0")
             return build_result(0.0)
+
+    # Create minimal env object
+    # Note: Use port 9222 because tasks use socat to forward 9222->1337
+    env = MinimalEnv(
+        vm_ip=vm_ip,
+        server_port=server_port,
+        chromium_port=9222,
+        cache_dir=cache_dir,
+        task_id=task_id
+    )
+
+    # Parse evaluator configuration
+    try:
+        parsed = parse_evaluator_config(evaluator_config)
+    except Exception as e:
+        logger.error(f"Failed to parse evaluator config: {e}")
+        raise
+
+    # Run postconfig (setup steps that run BEFORE evaluation)
+    if parsed["postconfig"]:
+        logger.info(f"Running postconfig with {len(parsed['postconfig'])} steps...")
+        try:
+            success = env.setup_controller.setup(parsed["postconfig"], use_proxy=False)
+            if not success:
+                logger.warning("Postconfig setup failed, continuing with evaluation anyway")
+        except Exception as e:
+            logger.error(f"Postconfig execution error: {e}")
+            logger.warning("Continuing with evaluation despite postconfig failure")
 
     # Handle normal tasks where agent incorrectly gave up
     if last_action == "FAIL":
