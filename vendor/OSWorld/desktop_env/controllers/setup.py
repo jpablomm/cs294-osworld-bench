@@ -21,20 +21,14 @@ from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 from desktop_env.controllers.python import PythonController
 from desktop_env.evaluators.metrics.utils import compare_urls
-from desktop_env.providers.aws.proxy_pool import get_global_proxy_pool, init_proxy_pool, ProxyInfo
 
 import dotenv
 # Load environment variables from .env file
 dotenv.load_dotenv()
 
-
-PROXY_CONFIG_FILE = os.getenv("PROXY_CONFIG_FILE", "evaluation_examples/settings/proxy/dataimpulse.json")  # Default proxy config file
-
 logger = logging.getLogger("desktopenv.setup")
 
 FILE_PATH = os.path.dirname(os.path.abspath(__file__))
-
-init_proxy_pool(PROXY_CONFIG_FILE)  # initialize the global proxy pool
 
 MAX_RETRIES = 20
 
@@ -527,71 +521,15 @@ class SetupController:
             logger.error("An error occurred while trying to send the request: %s", e)
 
     def _proxy_setup(self, client_password: str = ""):
-        """Setup system-wide proxy configuration using proxy pool
-        
-        Args:
-            client_password (str): Password for sudo operations, defaults to "password"
-        """
-        retry = 0
-        while retry < MAX_RETRIES:
-            try:
-                _ = requests.get(self.http_server + "/terminal")
-                break
-            except:
-                time.sleep(5)
-                retry += 1
-                logger.info(f"retry: {retry}/{MAX_RETRIES}")
-            
-            if retry == MAX_RETRIES:
-                return False
-            
-        # Get proxy from global proxy pool
-        proxy_pool = get_global_proxy_pool()
-        current_proxy = proxy_pool.get_next_proxy()
-        
-        if not current_proxy:
-            logger.error("No proxy available from proxy pool")
-            raise Exception("No proxy available from proxy pool")
-        
-        # Format proxy URL
-        proxy_url = proxy_pool._format_proxy_url(current_proxy)
-        logger.info(f"Setting up proxy: {current_proxy.host}:{current_proxy.port}")
-        
-        # Configure system proxy environment variables  
-        proxy_commands = [
-            f"echo '{client_password}' | sudo -S bash -c \"apt-get update\"", ## TODO: remove this line if ami is already updated
-            f"echo '{client_password}' | sudo -S bash -c \"apt-get install -y tinyproxy\"", ## TODO: remove this line if tinyproxy is already installed
-            f"echo '{client_password}' | sudo -S bash -c \"echo 'Port 18888' > /tmp/tinyproxy.conf\"",
-            f"echo '{client_password}' | sudo -S bash -c \"echo 'Allow 127.0.0.1' >> /tmp/tinyproxy.conf\"",
-            f"echo '{client_password}' | sudo -S bash -c \"echo 'Upstream http {current_proxy.username}:{current_proxy.password}@{current_proxy.host}:{current_proxy.port}' >> /tmp/tinyproxy.conf\"",
-            
-            # CML commands to set environment variables for proxy
-            f"echo 'export http_proxy={proxy_url}' >> ~/.bashrc",
-            f"echo 'export https_proxy={proxy_url}' >> ~/.bashrc",
-            f"echo 'export HTTP_PROXY={proxy_url}' >> ~/.bashrc",
-            f"echo 'export HTTPS_PROXY={proxy_url}' >> ~/.bashrc",
-        ]
+        """Setup system-wide proxy configuration.
 
-        # Execute all proxy configuration commands
-        for cmd in proxy_commands:
-            try:
-                self._execute_setup([cmd], shell=True)
-            except Exception as e:
-                logger.error(f"Failed to execute proxy setup command: {e}")
-                proxy_pool.mark_proxy_failed(current_proxy)
-                raise
-        
-        self._launch_setup(["tinyproxy -c /tmp/tinyproxy.conf -d"], shell=True)
-        
-        # Reload environment variables
-        reload_cmd = "source /etc/environment"
-        try:
-            logger.info(f"Proxy setup completed successfully for {current_proxy.host}:{current_proxy.port}")
-            proxy_pool.mark_proxy_success(current_proxy)
-        except Exception as e:
-            logger.error(f"Failed to reload environment variables: {e}")
-            proxy_pool.mark_proxy_failed(current_proxy)
-            raise
+        NOTE: Proxy pool functionality has been removed. If you need proxy support,
+        you'll need to restore the desktop_env.providers.aws.proxy_pool module.
+        """
+        raise NotImplementedError(
+            "Proxy setup is not available. The proxy pool module has been removed. "
+            "If you need proxy support, restore desktop_env/providers/aws/proxy_pool.py"
+        )
 
     # Chrome setup
     def _chrome_open_tabs_setup(self, urls_to_open: List[str]):
