@@ -1,6 +1,6 @@
-# White Agent - A2A Protocol (AgentBeats-compliant)
-# Uses earthshaker controller with a2a SDK
-# See white_agent/a2a/ for the implementation
+# Green Agent - A2A Protocol (with earthshaker controller)
+# For AgentBeats platform registration
+# See green_agent/a2a/ for the A2A protocol wrapper
 
 FROM python:3.13-slim
 
@@ -11,24 +11,27 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     curl \
+    libpq-dev \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements-white-agent-agentbeats.txt .
+# Copy requirements
+COPY requirements-cloudrun.txt .
 
-# Install Python dependencies (includes earthshaker and a2a SDK)
-RUN pip install --no-cache-dir -r requirements-white-agent-agentbeats.txt
+# Install Python dependencies (includes earthshaker)
+RUN pip install --no-cache-dir -r requirements-cloudrun.txt
 
 # Copy application code
+COPY green_agent/ green_agent/
 COPY white_agent/ white_agent/
 
-# Copy OSWorld vendor code (for PromptAgent)
-COPY vendor/OSWorld/mm_agents/ vendor/OSWorld/mm_agents/
-
 # Copy run script and Procfile for earthshaker
-COPY white_agent/a2a/run.sh run.sh
-COPY Procfile.white-agent Procfile
+COPY green_agent/a2a/run.sh run.sh
+COPY deploy/procfiles/Procfile.green-agent Procfile
 RUN chmod +x run.sh
+
+# Copy OSWorld vendor code
+COPY vendor/ vendor/
 
 # Environment
 ENV HOST=0.0.0.0

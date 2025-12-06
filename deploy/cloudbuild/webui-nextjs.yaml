@@ -7,7 +7,7 @@ steps:
     args:
       - 'build'
       - '-f'
-      - 'Dockerfile.webui-nextjs'
+      - 'deploy/docker/Dockerfile.webui-nextjs'
       - '-t'
       - 'us-central1-docker.pkg.dev/cs294-475401/green-agent/webui-nextjs:latest'
       - '-t'

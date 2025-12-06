@@ -44,7 +44,7 @@ fi
 
 echo "Building Docker image..."
 gcloud builds submit \
-  --config cloudbuild-white-agent.yaml \
+  --config deploy/cloudbuild/white-agent.yaml \
   --project $PROJECT_ID
 
 echo ""

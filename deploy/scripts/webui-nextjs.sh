@@ -60,7 +60,7 @@ rm -rf webui-next/.next
 
 echo "Building Docker image..."
 gcloud builds submit \
-  --config cloudbuild-webui-nextjs.yaml \
+  --config deploy/cloudbuild/webui-nextjs.yaml \
   --project $PROJECT_ID
 
 echo ""

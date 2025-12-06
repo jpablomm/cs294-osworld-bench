@@ -3,7 +3,7 @@ steps:
     args:
       - 'build'
       - '-f'
-      - 'Dockerfile.green-agent'
+      - 'deploy/docker/Dockerfile.green-agent'
       - '-t'
       - 'us-central1-docker.pkg.dev/cs294-475401/green-agent/green-agent'
       - '.'

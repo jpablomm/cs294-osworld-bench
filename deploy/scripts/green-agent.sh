@@ -105,7 +105,7 @@ echo "Building $IMAGE_TAG"
 cat > /tmp/cloudbuild-green-agent.yaml << EOF
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', '$IMAGE_TAG', '-f', 'Dockerfile.green-agent', '.']
+    args: ['build', '-t', '$IMAGE_TAG', '-f', 'deploy/docker/Dockerfile.green-agent', '.']
 
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '$IMAGE_TAG']

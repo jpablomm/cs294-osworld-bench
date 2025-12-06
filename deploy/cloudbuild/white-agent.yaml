@@ -3,7 +3,7 @@ steps:
     args:
       - 'build'
       - '-f'
-      - 'Dockerfile.white-agent'
+      - 'deploy/docker/Dockerfile.white-agent'
       - '-t'
       - 'us-central1-docker.pkg.dev/cs294-475401/green-agent/white-agent:latest'
       - '.'

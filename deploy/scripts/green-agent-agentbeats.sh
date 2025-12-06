@@ -1,24 +1,24 @@
 #!/bin/bash
 #
-# Deploy White Agent with AgentBeats Controller to Google Cloud Run
-# This is a SEPARATE deployment from the production white-agent instance
+# Deploy Green Agent with AgentBeats Controller to Google Cloud Run
+# This is a SEPARATE deployment from the production green-agent instance
 #
-# Service Name: white-agent-agentbeats (keeps production untouched)
+# Service Name: green-agent-agentbeats (keeps production untouched)
 # Uses: AgentBeats controller (earthshaker) via Procfile
 # Purpose: Testing and AgentBeats platform registration
 #
 # Usage:
-#   bash deploy_white_agent_agentbeats.sh [--project PROJECT_ID]
+#   bash deploy_green_agent_agentbeats.sh [--project PROJECT_ID]
 #
 
 set -e
 
 echo "========================================="
-echo "White Agent AgentBeats Controller Deploy"
+echo "Green Agent AgentBeats Controller Deploy"
 echo "========================================="
 echo ""
-echo "  This creates a SEPARATE Cloud Run service"
-echo "   Production 'white-agent' remains untouched"
+echo "⚠️  This creates a SEPARATE Cloud Run service"
+echo "   Production 'green-agent' remains untouched"
 echo ""
 
 # Parse arguments
@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: bash deploy_white_agent_agentbeats.sh [--project PROJECT_ID]"
+            echo "Usage: bash deploy_green_agent_agentbeats.sh [--project PROJECT_ID]"
             exit 1
             ;;
     esac
@@ -45,31 +45,12 @@ fi
 
 # Configuration
 REGION="us-central1"
-SERVICE_NAME="white-agent-agentbeats"  # Different from production!
+SERVICE_NAME="green-agent-agentbeats"  # Different from production!
 IMAGE_TAG="$REGION-docker.pkg.dev/$PROJECT_ID/$SERVICE_NAME/$SERVICE_NAME"
 
 # Check if project is set
 if [ -z "$PROJECT_ID" ]; then
     echo "Error: GCP project not set. Specify with --project or run: gcloud config set project PROJECT_ID"
-    exit 1
-fi
-
-# Load environment variables from .env file if available
-if [ -f ".env" ]; then
-    echo "Loading environment variables from .env file..."
-    export $(grep -v '^#' .env | xargs)
-fi
-
-# Check for required OpenAI API key
-if [ -z "$OPENAI_API_KEY" ]; then
-    echo ""
-    echo "ERROR: OPENAI_API_KEY not set!"
-    echo ""
-    echo "The white agent requires an OpenAI API key for GPT-4V access."
-    echo ""
-    echo "Please create a .env file with:"
-    echo "  OPENAI_API_KEY=sk-your-openai-api-key-here"
-    echo ""
     exit 1
 fi
 
@@ -86,9 +67,9 @@ if ! gcloud artifacts repositories describe $SERVICE_NAME --location=$REGION --p
         --repository-format=docker \
         --location=$REGION \
         --project=$PROJECT_ID \
-        --description="White Agent with AgentBeats controller" 2>&1 | grep -v "ALREADY_EXISTS" || true
+        --description="Green Agent with AgentBeats controller" 2>&1 | grep -v "ALREADY_EXISTS" || true
 fi
-echo "Artifact Registry ready"
+echo "✓ Artifact Registry ready"
 echo ""
 
 # Step 2: Build container image using Docker
@@ -96,10 +77,10 @@ echo "Step 2: Building container image..."
 echo "Building $IMAGE_TAG"
 
 # Create a temporary cloudbuild.yaml
-cat > /tmp/cloudbuild-white-agent-agentbeats.yaml << EOF
+cat > /tmp/cloudbuild-green-agent-agentbeats.yaml << EOF
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', '$IMAGE_TAG', '-f', 'Dockerfile.white-agent-agentbeats', '.']
+    args: ['build', '-t', '$IMAGE_TAG', '-f', 'deploy/docker/Dockerfile.green-agent-agentbeats', '.']
 
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '$IMAGE_TAG']
@@ -116,38 +97,57 @@ EOF
 
 echo "Submitting build (this may take 5-10 minutes)..."
 gcloud builds submit \
-    --config /tmp/cloudbuild-white-agent-agentbeats.yaml \
+    --config /tmp/cloudbuild-green-agent-agentbeats.yaml \
     --project=$PROJECT_ID \
     --timeout=20m
 
-rm /tmp/cloudbuild-white-agent-agentbeats.yaml
+rm /tmp/cloudbuild-green-agent-agentbeats.yaml
 
-echo "Container image built successfully"
+echo "✓ Container image built successfully"
 echo ""
 
 # Step 3: Deploy to Cloud Run
 echo "Step 3: Deploying to Cloud Run..."
 
+# Get the service URL to set CLOUDRUN_HOST (predict it from service name)
+# Cloud Run URLs follow pattern: SERVICE-HASH-REGION.a.run.app
+# We'll update it after deployment, but set HTTPS_ENABLED now
+PREDICTED_HOST="${SERVICE_NAME}-750082808015.${REGION}.run.app"
+
 # Build environment variables
-ENV_VARS="OPENAI_API_KEY=$OPENAI_API_KEY"
-ENV_VARS="$ENV_VARS,GPT4V_MODEL=${GPT4V_MODEL:-gpt-4o}"
-ENV_VARS="$ENV_VARS,GPT4V_TEMPERATURE=${GPT4V_TEMPERATURE:-1.0}"
+ENV_VARS="GCP_PROJECT=$PROJECT_ID"
+ENV_VARS="$ENV_VARS,USE_NATIVE_OSWORLD=1"
+ENV_VARS="$ENV_VARS,USE_FAKE_OSWORLD=0"
+ENV_VARS="$ENV_VARS,OSWORLD_MAX_STEPS=15"
 ENV_VARS="$ENV_VARS,HTTPS_ENABLED=true"
+
+# Load Supabase credentials from .env file if available
+if [ -f ".env" ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+# Add Supabase credentials (required for screenshot storage)
+if [ -n "$SUPABASE_URL" ]; then
+    ENV_VARS="$ENV_VARS,SUPABASE_URL=$SUPABASE_URL"
+fi
+if [ -n "$SUPABASE_SERVICE_KEY" ]; then
+    ENV_VARS="$ENV_VARS,SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY"
+fi
 
 gcloud run deploy "$SERVICE_NAME" \
     --image "$IMAGE_TAG" \
     --region "$REGION" \
     --project="$PROJECT_ID" \
     --platform managed \
-    --timeout 10m \
-    --memory 2Gi \
+    --timeout 30m \
+    --memory 4Gi \
     --cpu 2 \
-    --max-instances 10 \
+    --max-instances 5 \
     --min-instances 0 \
     --allow-unauthenticated \
     --set-env-vars "$ENV_VARS"
 
-echo "Deployed to Cloud Run"
+echo "✓ Deployed to Cloud Run"
 echo ""
 
 # Step 4: Get service URL and update CLOUDRUN_HOST
@@ -168,7 +168,7 @@ gcloud run services update "$SERVICE_NAME" \
     --project="$PROJECT_ID" \
     --update-env-vars "CLOUDRUN_HOST=$CLOUDRUN_HOST"
 
-echo "CLOUDRUN_HOST set"
+echo "✓ CLOUDRUN_HOST set"
 echo ""
 
 echo "========================================="
@@ -194,11 +194,19 @@ echo "4. Agent Discovery (via proxy):"
 echo "   # Get agent ID from /agents, then:"
 echo "   curl $SERVICE_URL/to_agent/{AGENT_ID}/.well-known/agent-card.json"
 echo ""
+echo "5. Direct Agent Discovery (if controller proxies root):"
+echo "   curl $SERVICE_URL/.well-known/agent-card.json"
+echo ""
 echo "========================================="
 echo "AgentBeats Platform Registration"
 echo "========================================="
 echo ""
 echo "Use this Controller URL for registration:"
 echo "  $SERVICE_URL"
+echo ""
+echo "The platform will verify:"
+echo "  - GET $SERVICE_URL/status"
+echo "  - GET $SERVICE_URL/agents"
+echo "  - GET $SERVICE_URL/.well-known/agent-card.json (via proxy)"
 echo ""
 echo "========================================="
