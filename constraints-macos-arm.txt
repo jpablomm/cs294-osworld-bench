@@ -1,8 +1,0 @@
-# Constraints for macOS ARM (Apple Silicon) to help uv/pip resolve wheels
-# These versions have prebuilt wheels widely available.
-
-torch==2.5.1
-torchvision==0.20.1
-torchaudio==2.5.1
-
-
