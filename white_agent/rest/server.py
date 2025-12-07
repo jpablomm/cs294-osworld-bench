@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-GPT-4V White Agent - REST API Server
+White Agent - REST API Server (Unified Multi-Model)
 
 FastAPI-based REST server for custom orchestrator integration.
-Uses shared core logic for GPT-4V inference and action parsing.
+Supports multiple model providers: GPT-4V, Claude, Qwen, etc.
 """
 
-import json
 import logging
 import os
 import uuid
@@ -16,7 +15,9 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from white_agent.core import GPT4VAgent, parse_observation, parse_actions, build_agent_url
+from white_agent.config import AgentConfig
+from white_agent.agents import create_agent, BaseAgent
+from white_agent.core import parse_observation, parse_actions, build_agent_url
 
 load_dotenv()
 
@@ -26,11 +27,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# FastAPI app
-app = FastAPI(title="GPT-4V White Agent (REST)")
+# Load configuration from environment
+config = AgentConfig.from_env()
 
-# Global agent instance
-agent = GPT4VAgent()
+# FastAPI app
+app = FastAPI(
+    title=f"White Agent (REST) - {config.agent_type}",
+    description=f"Unified white agent server using {config.model}"
+)
+
+# Global agent instance (created via factory)
+agent: BaseAgent = create_agent(config)
 
 # Conversation contexts (task_id -> context)
 conversation_contexts: Dict[str, Dict[str, Any]] = {}
@@ -62,20 +69,26 @@ class Observation(BaseModel):
     instruction: str = ""
     accessibility_tree: str | None = None
     done: bool = False
+    reset_before: bool = False  # If True, reset agent trajectory before processing
 
 
-class AgentCard(BaseModel):
+class AgentCardResponse(BaseModel):
     """Agent card for discovery"""
     name: str
     description: str
     url: str
     version: str
+    agent_type: str
+    model: str
 
 
 @app.on_event("startup")
 async def startup_event():
     """Startup - agent initializes lazily on first request"""
-    logger.info("White Agent (REST) starting - agent will initialize on first request")
+    logger.info(
+        f"White Agent (REST) starting - type={config.agent_type}, model={config.model}"
+    )
+    logger.info("Agent will initialize on first request")
 
 
 @app.get("/health")
@@ -83,9 +96,9 @@ def health():
     """Health check endpoint"""
     return {
         "status": "healthy" if agent.is_initialized else "initializing",
-        "agent_type": "white",
+        "agent_type": config.agent_type,
         "protocol": "rest",
-        "model": "gpt-4v",
+        "model": config.model,
         "agent_ready": agent.is_initialized,
         "active_contexts": len(conversation_contexts)
     }
@@ -96,20 +109,32 @@ def status():
     """Status endpoint"""
     return {
         "status": "running" if agent.is_initialized else "initializing",
-        "agent_type": "white",
+        "agent_type": config.agent_type,
+        "model": config.model,
         "protocol": "rest"
     }
 
 
 @app.get("/agent-card")
 @app.get("/.well-known/agent-card.json")
-def get_agent_card() -> AgentCard:
+def get_agent_card() -> AgentCardResponse:
     """Agent card for discovery"""
-    return AgentCard(
-        name="GPT-4V OSWorld Agent",
-        description="White agent for desktop automation using GPT-4V",
+    model_descriptions = {
+        "gpt4v": "GPT-4V vision-language model",
+        "claude": "Claude vision-language model",
+        "qwen": "Qwen VL vision-language model",
+        "o3": "OpenAI O3 reasoning model",
+        "gemini": "Google Gemini vision-language model",
+    }
+    model_desc = model_descriptions.get(config.agent_type, f"{config.agent_type} model")
+
+    return AgentCardResponse(
+        name=f"{config.agent_type.upper()} OSWorld Agent",
+        description=f"White agent for desktop automation using {model_desc}",
         url=build_agent_url(),
-        version="1.0.0"
+        version="1.0.0",
+        agent_type=config.agent_type,
+        model=config.model
     )
 
 
@@ -224,6 +249,10 @@ def decide(obs: Observation) -> Dict[str, Any]:
 
     Returns OSWorld action format:
     {"op": "click", "args": {"x": 100, "y": 200}}
+
+    Set reset_before=True in the request to clear agent trajectory before processing.
+    This should be used for the first observation of a new task to prevent
+    cross-task contamination from previous assessments.
     """
     try:
         agent.ensure_initialized()
@@ -231,6 +260,11 @@ def decide(obs: Observation) -> Dict[str, Any]:
         return {"op": "error", "args": {"message": str(e)}}
 
     try:
+        # Reset agent trajectory if requested (should be True for first step of new task)
+        if obs.reset_before:
+            agent.reset()
+            logger.info(f"Agent trajectory reset before processing frame {obs.frame_id}")
+
         obs_for_agent = {"screenshot": obs.image_png_b64}  # Will need to decode
         if obs.accessibility_tree:
             obs_for_agent["accessibility_tree"] = obs.accessibility_tree
@@ -266,7 +300,7 @@ def reset():
     agent.reset()
     conversation_contexts = {}
     logger.info("Agent reset")
-    return {"status": "reset"}
+    return {"status": "reset", "agent_type": config.agent_type}
 
 
 @app.get("/debug/contexts")
@@ -274,6 +308,8 @@ def debug_contexts():
     """Debug endpoint to view conversation contexts"""
     return {
         "active_contexts": len(conversation_contexts),
+        "agent_type": config.agent_type,
+        "model": config.model,
         "contexts": {
             ctx_id: {
                 "task_id": ctx["task_id"],

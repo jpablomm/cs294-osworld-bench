@@ -1680,6 +1680,18 @@ async def _execute_with_white_agent(
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         try:
+            # Step 0: Reset white agent to clear trajectory from previous assessments
+            # This prevents cross-task contamination where old observations/actions
+            # would be included in the LLM prompt for this new assessment
+            try:
+                reset_resp = await client.post(f"{white_agent_url}/reset", timeout=30.0)
+                if reset_resp.status_code == 200:
+                    logger.info(f"White agent reset successful before assessment {assessment_id}")
+                else:
+                    logger.warning(f"White agent reset returned status {reset_resp.status_code}")
+            except Exception as reset_err:
+                logger.warning(f"Failed to reset white agent (continuing anyway): {reset_err}")
+
             # Step 1: Send initial task to white agent
             logger.info(f"Sending task to white agent at {white_agent_url}")
 
