@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-White Agent - REST API Server (Unified Multi-Model)
+White Agent - REST API Server
 
 FastAPI-based REST server for custom orchestrator integration.
-Supports multiple model providers: GPT-4V, Claude, Qwen, etc.
+Uses PromptAgent for multi-model support (GPT-4V, Claude, Gemini, Qwen, etc.)
 """
 
 import logging
@@ -15,9 +15,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from white_agent.config import AgentConfig
-from white_agent.agents import create_agent, BaseAgent
-from white_agent.core import parse_observation, parse_actions, build_agent_url
+from white_agent.prompt_agent import PromptAgent
+from white_agent.core import parse_observation, parse_actions
 
 load_dotenv()
 
@@ -27,17 +26,42 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load configuration from environment
-config = AgentConfig.from_env()
+# Configuration from environment
+MODEL = os.environ.get("MODEL", os.environ.get("GPT4V_MODEL", "gpt-4o"))
+TEMPERATURE = float(os.environ.get("TEMPERATURE", os.environ.get("GPT4V_TEMPERATURE", "1.0")))
+OBSERVATION_TYPE = os.environ.get("OSWORLD_OBS_TYPE", "screenshot_a11y_tree")
+ACTION_SPACE = os.environ.get("ACTION_SPACE", "pyautogui")
+MAX_TRAJECTORY_LENGTH = int(os.environ.get("MAX_TRAJECTORY_LENGTH", "3"))
+MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "1500"))
+TOP_P = float(os.environ.get("TOP_P", "0.9"))
 
 # FastAPI app
 app = FastAPI(
-    title=f"White Agent (REST) - {config.agent_type}",
-    description=f"Unified white agent server using {config.model}"
+    title=f"White Agent (REST) - {MODEL}",
+    description=f"White agent server using PromptAgent with {MODEL}"
 )
 
-# Global agent instance (created via factory)
-agent: BaseAgent = create_agent(config)
+# Global agent instance - lazy initialization
+_agent: PromptAgent | None = None
+
+
+def get_agent() -> PromptAgent:
+    """Get or create the PromptAgent instance."""
+    global _agent
+    if _agent is None:
+        logger.info(f"Initializing PromptAgent: model={MODEL}, obs_type={OBSERVATION_TYPE}")
+        _agent = PromptAgent(
+            model=MODEL,
+            temperature=TEMPERATURE,
+            observation_type=OBSERVATION_TYPE,
+            action_space=ACTION_SPACE,
+            max_trajectory_length=MAX_TRAJECTORY_LENGTH,
+            max_tokens=MAX_TOKENS,
+            top_p=TOP_P,
+        )
+        logger.info("PromptAgent initialized successfully")
+    return _agent
+
 
 # Conversation contexts (task_id -> context)
 conversation_contexts: Dict[str, Dict[str, Any]] = {}
@@ -78,16 +102,20 @@ class AgentCardResponse(BaseModel):
     description: str
     url: str
     version: str
-    agent_type: str
     model: str
+
+
+def build_agent_url() -> str:
+    """Build the agent URL from environment."""
+    host = os.environ.get("HOST", "localhost")
+    port = os.environ.get("PORT", "9002")
+    return os.environ.get("AGENT_URL", f"http://{host}:{port}")
 
 
 @app.on_event("startup")
 async def startup_event():
     """Startup - agent initializes lazily on first request"""
-    logger.info(
-        f"White Agent (REST) starting - type={config.agent_type}, model={config.model}"
-    )
+    logger.info(f"White Agent (REST) starting - model={MODEL}")
     logger.info("Agent will initialize on first request")
 
 
@@ -95,11 +123,11 @@ async def startup_event():
 def health():
     """Health check endpoint"""
     return {
-        "status": "healthy" if agent.is_initialized else "initializing",
-        "agent_type": config.agent_type,
+        "status": "healthy" if _agent is not None else "initializing",
         "protocol": "rest",
-        "model": config.model,
-        "agent_ready": agent.is_initialized,
+        "model": MODEL,
+        "observation_type": OBSERVATION_TYPE,
+        "agent_ready": _agent is not None,
         "active_contexts": len(conversation_contexts)
     }
 
@@ -108,9 +136,8 @@ def health():
 def status():
     """Status endpoint"""
     return {
-        "status": "running" if agent.is_initialized else "initializing",
-        "agent_type": config.agent_type,
-        "model": config.model,
+        "status": "running" if _agent is not None else "initializing",
+        "model": MODEL,
         "protocol": "rest"
     }
 
@@ -119,22 +146,12 @@ def status():
 @app.get("/.well-known/agent-card.json")
 def get_agent_card() -> AgentCardResponse:
     """Agent card for discovery"""
-    model_descriptions = {
-        "gpt4v": "GPT-4V vision-language model",
-        "claude": "Claude vision-language model",
-        "qwen": "Qwen VL vision-language model",
-        "o3": "OpenAI O3 reasoning model",
-        "gemini": "Google Gemini vision-language model",
-    }
-    model_desc = model_descriptions.get(config.agent_type, f"{config.agent_type} model")
-
     return AgentCardResponse(
-        name=f"{config.agent_type.upper()} OSWorld Agent",
-        description=f"White agent for desktop automation using {model_desc}",
+        name=f"OSWorld Agent ({MODEL})",
+        description=f"White agent for desktop automation using {MODEL}",
         url=build_agent_url(),
-        version="1.0.0",
-        agent_type=config.agent_type,
-        model=config.model
+        version="2.0.0",
+        model=MODEL
     )
 
 
@@ -154,7 +171,7 @@ def handle_task(task: A2ATask) -> A2AMessage:
     }
     """
     try:
-        agent.ensure_initialized()
+        agent = get_agent()
     except Exception as e:
         return A2AMessage(
             message_id=str(uuid.uuid4()),
@@ -169,6 +186,8 @@ def handle_task(task: A2ATask) -> A2AMessage:
 
     # Initialize conversation context if needed
     if context_id not in conversation_contexts:
+        # Reset agent for new context to prevent cross-task contamination
+        agent.reset()
         conversation_contexts[context_id] = {
             "task_id": task.task_id,
             "step": 0,
@@ -200,11 +219,13 @@ def handle_task(task: A2ATask) -> A2AMessage:
             obs_for_agent["accessibility_tree"] = accessibility_tree
 
         # Get prediction
-        response, actions_str = agent.predict(instruction, obs_for_agent)
+        response, actions = agent.predict(instruction, obs_for_agent)
 
         # Parse actions
-        if isinstance(actions_str, list):
-            actions_str = actions_str[0] if actions_str else "DONE"
+        if isinstance(actions, list):
+            actions_str = actions[0] if actions else "DONE"
+        else:
+            actions_str = actions
         action = parse_actions(actions_str)
 
         # Update context
@@ -255,7 +276,7 @@ def decide(obs: Observation) -> Dict[str, Any]:
     cross-task contamination from previous assessments.
     """
     try:
-        agent.ensure_initialized()
+        agent = get_agent()
     except Exception as e:
         return {"op": "error", "args": {"message": str(e)}}
 
@@ -264,10 +285,6 @@ def decide(obs: Observation) -> Dict[str, Any]:
         if obs.reset_before:
             agent.reset()
             logger.info(f"Agent trajectory reset before processing frame {obs.frame_id}")
-
-        obs_for_agent = {"screenshot": obs.image_png_b64}  # Will need to decode
-        if obs.accessibility_tree:
-            obs_for_agent["accessibility_tree"] = obs.accessibility_tree
 
         # Parse observation properly
         observation = parse_observation({
@@ -281,10 +298,12 @@ def decide(obs: Observation) -> Dict[str, Any]:
         if obs.accessibility_tree:
             obs_for_agent["accessibility_tree"] = obs.accessibility_tree
 
-        response, actions_str = agent.predict(obs.instruction, obs_for_agent)
+        response, actions = agent.predict(obs.instruction, obs_for_agent)
 
-        if isinstance(actions_str, list):
-            actions_str = actions_str[0] if actions_str else "DONE"
+        if isinstance(actions, list):
+            actions_str = actions[0] if actions else "DONE"
+        else:
+            actions_str = actions
 
         return parse_actions(actions_str)
 
@@ -296,11 +315,12 @@ def decide(obs: Observation) -> Dict[str, Any]:
 @app.post("/reset")
 def reset():
     """Reset agent state"""
-    global conversation_contexts
-    agent.reset()
+    global conversation_contexts, _agent
+    if _agent is not None:
+        _agent.reset()
     conversation_contexts = {}
     logger.info("Agent reset")
-    return {"status": "reset", "agent_type": config.agent_type}
+    return {"status": "reset", "model": MODEL}
 
 
 @app.get("/debug/contexts")
@@ -308,8 +328,7 @@ def debug_contexts():
     """Debug endpoint to view conversation contexts"""
     return {
         "active_contexts": len(conversation_contexts),
-        "agent_type": config.agent_type,
-        "model": config.model,
+        "model": MODEL,
         "contexts": {
             ctx_id: {
                 "task_id": ctx["task_id"],
@@ -328,53 +347,29 @@ def debug_trajectory():
 
     This shows the internal state of the PromptAgent that determines
     what context is sent to the LLM on each prediction.
-
-    Returns:
-        - trajectory_length: Number of steps in history
-        - max_trajectory_length: How many steps are sent to LLM
-        - observations_count: Number of stored observations
-        - actions_count: Number of stored actions
-        - thoughts_count: Number of stored thoughts
-        - recent_actions: Last N actions taken (truncated for readability)
-        - recent_thoughts: Last N thoughts/reasoning (truncated)
     """
-    if not agent.is_initialized:
+    if _agent is None:
         return {
             "status": "agent_not_initialized",
             "message": "Agent has not been initialized yet. Make a prediction first."
         }
 
-    # Access the underlying PromptAgent's trajectory
-    # For GPT4VAgent, the trajectory is in agent._agent (the PromptAgent)
-    # For BaseAgent subclasses, trajectory is in agent.observations/actions/thoughts
-
-    prompt_agent = getattr(agent, '_agent', None)
-
-    if prompt_agent is not None:
-        # Using PromptAgent (GPT4V)
-        observations = getattr(prompt_agent, 'observations', [])
-        actions = getattr(prompt_agent, 'actions', [])
-        thoughts = getattr(prompt_agent, 'thoughts', [])
-        max_traj = getattr(prompt_agent, 'max_trajectory_length', 3)
-    else:
-        # Using BaseAgent trajectory
-        observations = agent.observations
-        actions = agent.actions
-        thoughts = agent.thoughts
-        max_traj = config.max_trajectory_length
+    observations = _agent.observations
+    actions = _agent.actions
+    thoughts = _agent.thoughts
+    max_traj = _agent.max_trajectory_length
 
     # Truncate for readability
     def truncate(s, max_len=200):
         if isinstance(s, str):
             return s[:max_len] + "..." if len(s) > max_len else s
         elif isinstance(s, list):
-            return [truncate(item, max_len) for item in s[-5:]]  # Last 5 items
+            return [truncate(item, max_len) for item in s[-5:]]
         return str(s)[:max_len]
 
     return {
         "status": "ok",
-        "agent_type": config.agent_type,
-        "model": config.model,
+        "model": MODEL,
         "trajectory_length": len(actions),
         "max_trajectory_length": max_traj,
         "context_sent_to_llm": min(len(actions), max_traj),

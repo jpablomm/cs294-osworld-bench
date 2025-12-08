@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-White Agent - A2A Protocol Server (Unified Multi-Model)
+White Agent - A2A Protocol Server
 
 Uses the a2a SDK (A2AStarletteApplication) for AgentBeats compliance.
-Supports multiple model providers: GPT-4V, Claude, Qwen, etc.
+Directly uses PromptAgent for multi-model support (GPT-4V, Claude, Gemini, Qwen, etc.)
 
 Based on: https://github.com/agentbeats/agentify-example-tau-bench
 """
@@ -24,9 +24,8 @@ from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentSkill, AgentCard, AgentCapabilities
 from a2a.utils import new_agent_text_message
 
-from white_agent.config import AgentConfig
-from white_agent.agents import create_agent, BaseAgent
-from white_agent.core import parse_observation, parse_actions, build_agent_url
+from white_agent.prompt_agent import PromptAgent
+from white_agent.core import parse_observation, parse_actions
 
 load_dotenv()
 
@@ -36,45 +35,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Configuration from environment
+MODEL = os.environ.get("MODEL", os.environ.get("GPT4V_MODEL", "gpt-4o"))
+TEMPERATURE = float(os.environ.get("TEMPERATURE", os.environ.get("GPT4V_TEMPERATURE", "1.0")))
+OBSERVATION_TYPE = os.environ.get("OSWORLD_OBS_TYPE", "screenshot_a11y_tree")
+ACTION_SPACE = os.environ.get("ACTION_SPACE", "pyautogui")
+MAX_TRAJECTORY_LENGTH = int(os.environ.get("MAX_TRAJECTORY_LENGTH", "3"))
+MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "1500"))
+TOP_P = float(os.environ.get("TOP_P", "0.9"))
 
-def prepare_agent_card(url: str, config: AgentConfig) -> AgentCard:
-    """Prepare A2A-compliant agent card based on configuration."""
-    # Build agent name from config
-    agent_name = f"{config.agent_type}_osworld_agent"
 
-    # Build description based on agent type
-    model_descriptions = {
-        "gpt4v": "GPT-4V vision-language model",
-        "claude": "Claude vision-language model",
-        "qwen": "Qwen VL vision-language model",
-        "o3": "OpenAI O3 reasoning model",
-        "gemini": "Google Gemini vision-language model",
-    }
-    model_desc = model_descriptions.get(config.agent_type, f"{config.agent_type} model")
-
+def prepare_agent_card(url: str, model: str) -> AgentCard:
+    """Prepare A2A-compliant agent card."""
     skills = [
         AgentSkill(
             id="desktop-automation",
             name="Desktop Automation",
-            description=f"Execute desktop automation actions (click, type, hotkey, scroll) using {model_desc}",
-            tags=["automation", "desktop", "gui", "osworld", config.agent_type],
+            description=f"Execute desktop automation actions (click, type, hotkey, scroll) using {model}",
+            tags=["automation", "desktop", "gui", "osworld"],
             examples=[],
         ),
         AgentSkill(
             id="vision-reasoning",
             name="Vision-Language Reasoning",
-            description=f"Analyze screenshots and determine appropriate actions using {model_desc}",
-            tags=["vision", config.agent_type, "reasoning", "screenshot"],
+            description=f"Analyze screenshots and determine appropriate actions using {model}",
+            tags=["vision", "reasoning", "screenshot"],
             examples=[],
         ),
     ]
 
     return AgentCard(
-        name=agent_name,
-        description=f"White agent for executing desktop automation tasks using {model_desc} ({config.model}). "
+        name=f"osworld_agent_{model.replace('-', '_')}",
+        description=f"White agent for executing desktop automation tasks using {model}. "
                     "Receives observations (screenshots, instructions) and returns actions for OSWorld workflows.",
         url=url,
-        version="1.0.0",
+        version="2.0.0",
         default_input_modes=["application/json"],
         default_output_modes=["application/json"],
         capabilities=AgentCapabilities(),
@@ -82,33 +77,47 @@ def prepare_agent_card(url: str, config: AgentConfig) -> AgentCard:
     )
 
 
-class UnifiedAgentExecutor(AgentExecutor):
+class PromptAgentExecutor(AgentExecutor):
     """
-    A2A Agent executor supporting multiple model providers.
+    A2A Agent executor using PromptAgent directly.
 
-    Uses the agent factory to create the appropriate agent based on configuration.
+    Supports all models that PromptAgent supports (GPT-4V, Claude, Gemini, Qwen, etc.)
     """
 
-    def __init__(self, config: AgentConfig):
-        self.config = config
-        self.agent: BaseAgent = create_agent(config)
+    def __init__(self):
+        self.agent: PromptAgent | None = None
         self.ctx_id_to_history: Dict[str, list] = {}
         logger.info(
-            f"UnifiedAgentExecutor initialized with {config.agent_type} "
-            f"(model={config.model}, agent will be created on first use)"
+            f"PromptAgentExecutor initialized "
+            f"(model={MODEL}, obs_type={OBSERVATION_TYPE}, agent will be created on first use)"
         )
 
+    def _get_agent(self) -> PromptAgent:
+        """Get or create the PromptAgent instance."""
+        if self.agent is None:
+            logger.info(f"Creating PromptAgent: model={MODEL}, obs_type={OBSERVATION_TYPE}")
+            self.agent = PromptAgent(
+                model=MODEL,
+                temperature=TEMPERATURE,
+                observation_type=OBSERVATION_TYPE,
+                action_space=ACTION_SPACE,
+                max_trajectory_length=MAX_TRAJECTORY_LENGTH,
+                max_tokens=MAX_TOKENS,
+                top_p=TOP_P,
+            )
+            logger.info("PromptAgent created successfully")
+        return self.agent
+
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        """Execute a task using the configured agent."""
+        """Execute a task using PromptAgent."""
         try:
-            # Initialize agent on first use
-            self.agent.ensure_initialized()
+            agent = self._get_agent()
 
             # Reset agent trajectory if this is a new context (new task)
             # This prevents cross-task contamination where trajectory from
             # previous assessments would be included in the LLM prompt
             if context.context_id not in self.ctx_id_to_history:
-                self.agent.reset()
+                agent.reset()
                 self.ctx_id_to_history[context.context_id] = []
                 logger.info(f"Reset agent trajectory for new context: {context.context_id}")
 
@@ -136,21 +145,21 @@ class UnifiedAgentExecutor(AgentExecutor):
                     obs_for_agent["accessibility_tree"] = accessibility_tree
 
                 # Log trajectory state before prediction (for debugging)
-                prompt_agent = getattr(self.agent, '_agent', None)
-                if prompt_agent is not None:
-                    traj_len = len(getattr(prompt_agent, 'observations', []))
-                    max_traj = getattr(prompt_agent, 'max_trajectory_length', 3)
-                    logger.info(
-                        f"Trajectory state: {traj_len} steps in history, "
-                        f"sending last {min(traj_len, max_traj)} to LLM"
-                    )
+                traj_len = len(agent.observations)
+                max_traj = agent.max_trajectory_length
+                logger.info(
+                    f"Trajectory state: {traj_len} steps in history, "
+                    f"sending last {min(traj_len, max_traj)} to LLM"
+                )
 
-                logger.info(f"Calling {self.config.agent_type} agent with instruction: {instruction[:80]}...")
-                response, actions_str = self.agent.predict(instruction, obs_for_agent)
+                logger.info(f"Calling PromptAgent ({MODEL}) with instruction: {instruction[:80]}...")
+                response, actions = agent.predict(instruction, obs_for_agent)
 
                 # Parse actions
-                if isinstance(actions_str, list):
-                    actions_str = actions_str[0] if actions_str else "DONE"
+                if isinstance(actions, list):
+                    actions_str = actions[0] if actions else "DONE"
+                else:
+                    actions_str = actions
                 action = parse_actions(actions_str)
 
                 # Build response
@@ -158,7 +167,7 @@ class UnifiedAgentExecutor(AgentExecutor):
                     "action": action,
                     "reasoning": response,
                     "raw_actions": actions_str,
-                    "done": action.get("op") == "done" or "DONE" in actions_str
+                    "done": action.get("op") == "done" or "DONE" in str(actions_str)
                 }
                 response_text = json.dumps(result)
             else:
@@ -192,36 +201,32 @@ class UnifiedAgentExecutor(AgentExecutor):
             del self.ctx_id_to_history[context.context_id]
 
 
-# Backwards compatibility alias
-GPT4VAgentExecutor = UnifiedAgentExecutor
+# Backwards compatibility aliases
+UnifiedAgentExecutor = PromptAgentExecutor
+GPT4VAgentExecutor = PromptAgentExecutor
 
 
-def start_agent(host: str = "0.0.0.0", port: int = 8001, config: AgentConfig = None):
+def start_agent(host: str = "0.0.0.0", port: int = 8001):
     """
     Start the white agent server using A2A SDK.
 
     Args:
         host: Host to bind to
         port: Port to listen on
-        config: Agent configuration (defaults to AgentConfig.from_env())
     """
-    # Load configuration from environment if not provided
-    if config is None:
-        config = AgentConfig.from_env()
-
     logger.info(f"Starting White Agent (A2A) on {host}:{port}")
-    logger.info(f"Agent type: {config.agent_type}, Model: {config.model}")
+    logger.info(f"Model: {MODEL}, Observation type: {OBSERVATION_TYPE}")
 
     # Get agent URL from environment (set by AgentBeats controller)
     agent_url = os.getenv("AGENT_URL", f"http://{host}:{port}")
     logger.info(f"Agent URL: {agent_url}")
 
     # Create agent card
-    card = prepare_agent_card(agent_url, config)
+    card = prepare_agent_card(agent_url, MODEL)
 
     # Create request handler with our executor
     request_handler = DefaultRequestHandler(
-        agent_executor=UnifiedAgentExecutor(config),
+        agent_executor=PromptAgentExecutor(),
         task_store=InMemoryTaskStore(),
     )
 
