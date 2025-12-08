@@ -12,6 +12,7 @@ from .base import BaseAgent
 from .gpt4v import GPT4VAgent
 from .claude import ClaudeAgent
 from .qwen import QwenAgent
+from .langchainagent import LangChainAgent
 from ..config import AgentConfig, AgentType
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ AGENT_REGISTRY: dict[str, Type[BaseAgent]] = {
     AgentType.O3: GPT4VAgent,  # O3 uses same wrapper with different model
     AgentType.CLAUDE: ClaudeAgent,
     AgentType.QWEN: QwenAgent,
+    AgentType.LANGCHAIN: LangChainAgent,
 }
 
 
@@ -92,6 +94,7 @@ __all__ = [
     "GPT4VAgent",
     "ClaudeAgent",
     "QwenAgent",
+    "LangChainAgent",
     "create_agent",
     "get_supported_agents",
     "register_agent",
