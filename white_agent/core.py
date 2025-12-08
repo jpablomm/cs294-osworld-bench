@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-White Agent Core - Shared logic between A2A and REST implementations.
+White Agent Core - Shared utilities for A2A and REST implementations.
 
 This module contains:
-- GPT-4V PromptAgent initialization and management
-- Action parsing (pyautogui -> OSWorld format)
-- Observation parsing
+- Action parsing (pyautogui -> OSWorld action format)
+- Observation parsing (base64 screenshots, accessibility trees)
+- URL building utilities
 """
 
 import base64
@@ -13,76 +13,9 @@ import json
 import logging
 import os
 import re
-import sys
-from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
-
-# Add vendor/OSWorld to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "vendor" / "OSWorld"))
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
-
-
-class GPT4VAgent:
-    """
-    Wrapper around OSWorld's PromptAgent for GPT-4V inference.
-
-    Provides lazy initialization to avoid blocking subprocess startup.
-    """
-
-    def __init__(self):
-        self._agent = None
-        self._model = os.environ.get("GPT4V_MODEL", "gpt-4o")
-        self._temperature = float(os.environ.get("GPT4V_TEMPERATURE", "1.0"))
-        self._observation_type = os.environ.get("OSWORLD_OBS_TYPE", "screenshot")
-
-    @property
-    def is_initialized(self) -> bool:
-        return self._agent is not None
-
-    def ensure_initialized(self):
-        """Lazily initialize PromptAgent on first use"""
-        if self._agent is not None:
-            return
-
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable not set")
-
-        # Lazy import to avoid OpenAI client initialization hanging in subprocess context
-        from mm_agents.agent import PromptAgent
-
-        logger.info(f"Initializing PromptAgent with model={self._model}, "
-                   f"temperature={self._temperature}, observation_type={self._observation_type}")
-
-        self._agent = PromptAgent(
-            model=self._model,
-            observation_type=self._observation_type,
-            action_space="pyautogui",
-            max_tokens=1500,
-            temperature=self._temperature,
-            top_p=0.9
-        )
-        logger.info("PromptAgent initialized successfully")
-
-    def predict(self, instruction: str, observation: Dict[str, Any]) -> Tuple[str, str]:
-        """
-        Get action prediction from GPT-4V.
-
-        Args:
-            instruction: Task instruction
-            observation: Dict with 'screenshot' (bytes) and optionally 'accessibility_tree' (str)
-
-        Returns:
-            Tuple of (reasoning_response, action_string)
-        """
-        self.ensure_initialized()
-        return self._agent.predict(instruction, observation)
-
-    def reset(self):
-        """Reset agent state"""
-        if self._agent is not None:
-            self._agent.reset()
 
 
 def parse_observation(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -117,7 +50,7 @@ def parse_observation(data: Dict[str, Any]) -> Dict[str, Any]:
         "done": obs_data.get("done", False)
     }
 
-    # Include accessibility tree if provided (XML string from OSWorld)
+    # Include accessibility tree if provided (XML string from OSWorld VM)
     if "accessibility_tree" in obs_data and obs_data["accessibility_tree"]:
         result["accessibility_tree"] = obs_data["accessibility_tree"]
 
@@ -147,7 +80,7 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
             if "op" in action_dict:
                 # Handle screenshot action (convert to wait since screenshots are automatic)
                 if action_dict["op"] == "screenshot":
-                    logger.info("GPT-4V requested screenshot - converting to wait")
+                    logger.info("Model requested screenshot - converting to wait")
                     return {"op": "wait", "args": {"duration": 0.5}}
                 return action_dict
         except json.JSONDecodeError:
@@ -223,7 +156,7 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
 
 
 def build_agent_url() -> str:
-    """Build agent URL from environment variables"""
+    """Build agent URL from environment variables."""
     # Check for AGENT_URL first (set by AgentBeats controller)
     agent_url = os.getenv("AGENT_URL")
     if agent_url:

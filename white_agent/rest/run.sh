@@ -1,7 +1,7 @@
 #!/bin/bash
 # White Agent - REST API Runner
 
-export PYTHONPATH="${PYTHONPATH:-/app:/app/vendor/OSWorld}"
+export PYTHONPATH="${PYTHONPATH:-/app}"
 export PYTHONUNBUFFERED=1
 
 PORT=${PORT:-9002}

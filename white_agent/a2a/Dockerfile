@@ -21,9 +21,6 @@ RUN pip install --no-cache-dir -r requirements-white-agent-agentbeats.txt
 # Copy application code
 COPY white_agent/ white_agent/
 
-# Copy OSWorld vendor code (for PromptAgent)
-COPY vendor/OSWorld/mm_agents/ vendor/OSWorld/mm_agents/
-
 # Copy run script and Procfile for earthshaker
 COPY white_agent/a2a/run.sh run.sh
 COPY Procfile.white-agent Procfile
@@ -32,7 +29,7 @@ RUN chmod +x run.sh
 # Environment
 ENV HOST=0.0.0.0
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app:/app/vendor/OSWorld
+ENV PYTHONPATH=/app
 ENV PORT=8080
 
 EXPOSE 8080

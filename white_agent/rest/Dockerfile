@@ -20,14 +20,11 @@ RUN pip install --no-cache-dir -r requirements-white-agent.txt
 # Copy application code
 COPY white_agent/ white_agent/
 
-# Copy OSWorld vendor code (for PromptAgent)
-COPY vendor/OSWorld/mm_agents/ vendor/OSWorld/mm_agents/
-
 # Environment
 ENV HOST=0.0.0.0
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app:/app/vendor/OSWorld
+ENV PYTHONPATH=/app
 
 EXPOSE 8080
 

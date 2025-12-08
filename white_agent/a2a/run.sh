@@ -2,7 +2,7 @@
 # White Agent - A2A Protocol Runner
 # For use with AgentBeats earthshaker controller
 
-export PYTHONPATH="${PYTHONPATH:-/app:/app/vendor/OSWorld}"
+export PYTHONPATH="${PYTHONPATH:-/app}"
 export PYTHONUNBUFFERED=1
 
 echo "=== White Agent (A2A) Starting ===" >&2
