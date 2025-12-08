@@ -39,7 +39,7 @@ def test_trash_recovery_evaluation(vm_ip: str):
     # Load full OSWorld task
     task_executor = TaskExecutor()
     try:
-        osworld_task = task_executor.load_osworld_task(task_id, domain=domain)
+        osworld_task = task_executor.load_task(task_id, domain=domain)
         logger.info(f"Loaded OSWorld task: {osworld_task.get('instruction', 'No instruction')}")
     except FileNotFoundError:
         logger.error(f"Task {task_id} not found in domain {domain}")

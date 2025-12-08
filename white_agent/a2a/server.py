@@ -135,6 +135,16 @@ class UnifiedAgentExecutor(AgentExecutor):
                 if accessibility_tree:
                     obs_for_agent["accessibility_tree"] = accessibility_tree
 
+                # Log trajectory state before prediction (for debugging)
+                prompt_agent = getattr(self.agent, '_agent', None)
+                if prompt_agent is not None:
+                    traj_len = len(getattr(prompt_agent, 'observations', []))
+                    max_traj = getattr(prompt_agent, 'max_trajectory_length', 3)
+                    logger.info(
+                        f"Trajectory state: {traj_len} steps in history, "
+                        f"sending last {min(traj_len, max_traj)} to LLM"
+                    )
+
                 logger.info(f"Calling {self.config.agent_type} agent with instruction: {instruction[:80]}...")
                 response, actions_str = self.agent.predict(instruction, obs_for_agent)
 

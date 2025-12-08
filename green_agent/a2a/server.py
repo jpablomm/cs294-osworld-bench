@@ -622,7 +622,7 @@ async def _execute_assessment(
         if not osworld_task:
             try:
                 logger.info("Loading full OSWorld task configuration from files...")
-                osworld_task = get_task_executor().load_osworld_task(
+                osworld_task = get_task_executor().load_task(
                     config["osworld_task_id"],
                     domain=config.get("domain")
                 )

@@ -199,7 +199,9 @@ def run_osworld_native(
                 time.sleep(OSWORLD_SLEEP_AFTER_EXEC)
 
         # Evaluate task success using OSWorld evaluation system
-        if osworld_task and "evaluator" in osworld_task:
+        # Check task first, fall back to osworld_task for backward compatibility
+        eval_source = task if "evaluator" in task else osworld_task
+        if eval_source and "evaluator" in eval_source:
             logger.info("Running OSWorld evaluation...")
             try:
                 from .osworld_evaluator import evaluate_task
@@ -210,8 +212,8 @@ def run_osworld_native(
                 # Run OSWorld evaluation
                 evaluation_score = evaluate_task(
                     vm_ip=vm_ip,
-                    evaluator_config=osworld_task["evaluator"],
-                    task_id=osworld_task.get("id", task.get("id", "unknown")),
+                    evaluator_config=eval_source["evaluator"],
+                    task_id=eval_source.get("id", task.get("id", "unknown")),
                     server_port=5000,
                     cache_dir="cache"
                 )

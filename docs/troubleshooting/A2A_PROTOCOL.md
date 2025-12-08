@@ -453,7 +453,7 @@ INFO Task marked as failed due to missing evaluator
 **Check task has evaluator:**
 ```python
 # Load task
-task = task_executor.load_osworld_task(task_id)
+task = task_executor.load_task(task_id)
 
 # Verify evaluator exists
 if "evaluator" not in task:

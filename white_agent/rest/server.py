@@ -321,6 +321,75 @@ def debug_contexts():
     }
 
 
+@app.get("/debug/trajectory")
+def debug_trajectory():
+    """
+    Debug endpoint to inspect agent trajectory history.
+
+    This shows the internal state of the PromptAgent that determines
+    what context is sent to the LLM on each prediction.
+
+    Returns:
+        - trajectory_length: Number of steps in history
+        - max_trajectory_length: How many steps are sent to LLM
+        - observations_count: Number of stored observations
+        - actions_count: Number of stored actions
+        - thoughts_count: Number of stored thoughts
+        - recent_actions: Last N actions taken (truncated for readability)
+        - recent_thoughts: Last N thoughts/reasoning (truncated)
+    """
+    if not agent.is_initialized:
+        return {
+            "status": "agent_not_initialized",
+            "message": "Agent has not been initialized yet. Make a prediction first."
+        }
+
+    # Access the underlying PromptAgent's trajectory
+    # For GPT4VAgent, the trajectory is in agent._agent (the PromptAgent)
+    # For BaseAgent subclasses, trajectory is in agent.observations/actions/thoughts
+
+    prompt_agent = getattr(agent, '_agent', None)
+
+    if prompt_agent is not None:
+        # Using PromptAgent (GPT4V)
+        observations = getattr(prompt_agent, 'observations', [])
+        actions = getattr(prompt_agent, 'actions', [])
+        thoughts = getattr(prompt_agent, 'thoughts', [])
+        max_traj = getattr(prompt_agent, 'max_trajectory_length', 3)
+    else:
+        # Using BaseAgent trajectory
+        observations = agent.observations
+        actions = agent.actions
+        thoughts = agent.thoughts
+        max_traj = config.max_trajectory_length
+
+    # Truncate for readability
+    def truncate(s, max_len=200):
+        if isinstance(s, str):
+            return s[:max_len] + "..." if len(s) > max_len else s
+        elif isinstance(s, list):
+            return [truncate(item, max_len) for item in s[-5:]]  # Last 5 items
+        return str(s)[:max_len]
+
+    return {
+        "status": "ok",
+        "agent_type": config.agent_type,
+        "model": config.model,
+        "trajectory_length": len(actions),
+        "max_trajectory_length": max_traj,
+        "context_sent_to_llm": min(len(actions), max_traj),
+        "observations_count": len(observations),
+        "actions_count": len(actions),
+        "thoughts_count": len(thoughts),
+        "recent_actions": truncate(actions),
+        "recent_thoughts": truncate(thoughts),
+        "observation_has_screenshot": [
+            bool(obs.get("screenshot")) if isinstance(obs, dict) else False
+            for obs in observations[-5:]
+        ] if observations else [],
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "9002"))
