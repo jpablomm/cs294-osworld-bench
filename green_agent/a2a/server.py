@@ -1695,9 +1695,21 @@ async def _execute_with_white_agent(
             # Step 1: Send initial task to white agent
             logger.info(f"Sending task to white agent at {white_agent_url}")
 
-            # Initial observation - take screenshot
+            # Initial observation - take screenshot and get accessibility tree
             screenshot_resp = await client.get(f"{osworld_base_url}/screenshot")
             screenshot_b64 = base64.b64encode(screenshot_resp.content).decode()
+
+            # Fetch accessibility tree for enhanced white agent reasoning
+            accessibility_tree = None
+            try:
+                a11y_resp = await client.get(f"{osworld_base_url}/accessibility", timeout=10.0)
+                if a11y_resp.status_code == 200:
+                    a11y_data = a11y_resp.json()
+                    accessibility_tree = a11y_data.get("AT", "")
+                    if accessibility_tree:
+                        logger.info(f"Fetched accessibility tree ({len(accessibility_tree)} chars)")
+            except Exception as e:
+                logger.warning(f"Failed to fetch accessibility tree: {e}")
 
             # Store initial screenshot for LLM fallback evaluation
             initial_screenshot_bytes = screenshot_resp.content
@@ -1707,18 +1719,23 @@ async def _execute_with_white_agent(
             Path(f"{artifacts_dir}/step_0_initial.png").write_bytes(screenshot_resp.content)
 
             # Build initial A2A task with observation
+            observation_data = {
+                "frame_id": 0,
+                "image_png_b64": screenshot_b64,
+                "instruction": task_dict["message"],
+                "done": False
+            }
+            # Include accessibility tree if available (for screenshot_a11y_tree mode)
+            if accessibility_tree:
+                observation_data["accessibility_tree"] = accessibility_tree
+
             current_task = {
                 "task_id": task_dict["task_id"],
                 "context_id": task_dict["context_id"],
                 "message": task_dict["message"],
                 "metadata": {
                     **task_dict["metadata"],
-                    "observation": {
-                        "frame_id": 0,
-                        "image_png_b64": screenshot_b64,
-                        "instruction": task_dict["message"],
-                        "done": False
-                    }
+                    "observation": observation_data
                 }
             }
 
@@ -1951,9 +1968,19 @@ async def _execute_with_white_agent(
                 # Wait a moment for action to complete
                 await asyncio.sleep(0.5)
 
-                # Capture new observation
+                # Capture new observation (screenshot + accessibility tree)
                 screenshot_resp = await client.get(f"{osworld_base_url}/screenshot")
                 screenshot_b64 = base64.b64encode(screenshot_resp.content).decode()
+
+                # Fetch updated accessibility tree
+                accessibility_tree = None
+                try:
+                    a11y_resp = await client.get(f"{osworld_base_url}/accessibility", timeout=10.0)
+                    if a11y_resp.status_code == 200:
+                        a11y_data = a11y_resp.json()
+                        accessibility_tree = a11y_data.get("AT", "")
+                except Exception as e:
+                    logger.debug(f"Failed to fetch accessibility tree at step {step}: {e}")
 
                 # Store as potential final screenshot for LLM fallback evaluation
                 final_screenshot_bytes = screenshot_resp.content
@@ -1990,18 +2017,24 @@ async def _execute_with_white_agent(
 
                 # Update task for next iteration
                 step += 1
+
+                # Build observation with accessibility tree if available
+                next_observation = {
+                    "frame_id": step,
+                    "image_png_b64": screenshot_b64,
+                    "instruction": task_dict["message"],
+                    "done": False
+                }
+                if accessibility_tree:
+                    next_observation["accessibility_tree"] = accessibility_tree
+
                 current_task = {
                     "task_id": task_dict["task_id"],
                     "context_id": task_dict["context_id"],
                     "message": f"Step {step}: Previous action completed. Current state shown in screenshot.",
                     "metadata": {
                         **task_dict["metadata"],
-                        "observation": {
-                            "frame_id": step,
-                            "image_png_b64": screenshot_b64,
-                            "instruction": task_dict["message"],
-                            "done": False
-                        }
+                        "observation": next_observation
                     }
                 }
 

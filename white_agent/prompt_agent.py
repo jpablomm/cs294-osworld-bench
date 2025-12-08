@@ -446,8 +446,21 @@ class PromptAgent:
         # {{{1
         if self.observation_type in ["screenshot", "screenshot_a11y_tree"]:
             base64_image = encode_image(obs["screenshot"])
-            linearized_accessibility_tree = linearize_accessibility_tree(accessibility_tree=obs["accessibility_tree"],
-                                                                         platform=self.platform) if self.observation_type == "screenshot_a11y_tree" else None
+
+            # Handle accessibility tree - may be missing if green agent doesn't provide it
+            linearized_accessibility_tree = None
+            if self.observation_type == "screenshot_a11y_tree":
+                if "accessibility_tree" in obs and obs["accessibility_tree"]:
+                    linearized_accessibility_tree = linearize_accessibility_tree(
+                        accessibility_tree=obs["accessibility_tree"],
+                        platform=self.platform
+                    )
+                else:
+                    logger.warning(
+                        "observation_type is 'screenshot_a11y_tree' but no accessibility_tree provided. "
+                        "Falling back to screenshot-only mode for this step."
+                    )
+
             logger.debug("LINEAR AT: %s", linearized_accessibility_tree)
 
             if linearized_accessibility_tree:
@@ -465,15 +478,19 @@ class PromptAgent:
                     "accessibility_tree": None
                 })
 
+            # Build message text based on whether accessibility tree is available
+            if linearized_accessibility_tree:
+                message_text = "Given the screenshot and info from accessibility tree as below:\n{}\nWhat's the next step that you will do to help with the task?".format(
+                    linearized_accessibility_tree)
+            else:
+                message_text = "Given the screenshot as below. What's the next step that you will do to help with the task?"
+
             messages.append({
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": "Given the screenshot as below. What's the next step that you will do to help with the task?"
-                        if self.observation_type == "screenshot"
-                        else "Given the screenshot and info from accessibility tree as below:\n{}\nWhat's the next step that you will do to help with the task?".format(
-                            linearized_accessibility_tree)
+                        "text": message_text
                     },
                     {
                         "type": "image_url",
