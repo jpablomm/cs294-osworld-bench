@@ -7,7 +7,6 @@ Components:
 - server.py: Main A2A FastAPI server
 - vm_manager.py: GCP VM lifecycle management
 - task_executor.py: OSWorld task execution
-- storage.py: GCS storage for artifacts
 - supabase_storage.py: Supabase storage for screenshots
 """
 

@@ -1,16 +1,8 @@
 import os, time, base64, io, logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from PIL import Image
 
 logger = logging.getLogger(__name__)
-
-# Import GCS storage (gracefully handle missing module)
-try:
-    from green_agent.a2a.gcs_storage import get_gcs_storage
-    GCS_AVAILABLE = True
-except ImportError:
-    logger.warning("GCS storage module not available - screenshots will only be saved locally")
-    GCS_AVAILABLE = False
 
 # OSWorld configuration
 OSWORLD_SERVER_URL = os.environ.get("OSWORLD_SERVER_URL", "http://localhost:5000")
@@ -32,7 +24,6 @@ def run_osworld_native(
     artifacts_dir: str | None = None,
     white_agent_url: str | None = None,
     osworld_task: Dict[str, Any] | None = None,
-    assessment_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Run OSWorld assessment using native REST API (port 5000).
@@ -43,7 +34,6 @@ def run_osworld_native(
         artifacts_dir: Directory to save screenshots
         white_agent_url: URL of White Agent (unused, kept for compatibility)
         osworld_task: Full OSWorld task config with evaluator (optional)
-        assessment_id: Assessment ID for GCS uploads (extracted from artifacts_dir if not provided)
 
     Returns:
         Dictionary with success, steps, time_sec, etc.
@@ -75,27 +65,6 @@ def run_osworld_native(
     else:
         frames_dir = None
 
-    # Extract assessment_id from artifacts_dir if not provided
-    # Expected format: ./temp_artifacts/{assessment_id} or similar
-    if assessment_id is None and artifacts_dir:
-        try:
-            # Extract last component of path (should be assessment_id)
-            path_parts = os.path.normpath(artifacts_dir).split(os.sep)
-            if len(path_parts) > 0:
-                assessment_id = path_parts[-1]
-                logger.info(f"Extracted assessment_id from artifacts_dir: {assessment_id}")
-        except Exception as e:
-            logger.warning(f"Could not extract assessment_id from artifacts_dir: {e}")
-
-    # Initialize GCS storage if available
-    gcs_storage = None
-    if GCS_AVAILABLE and assessment_id:
-        try:
-            gcs_storage = get_gcs_storage()
-            logger.info(f"GCS storage initialized for assessment {assessment_id}")
-        except Exception as e:
-            logger.warning(f"Failed to initialize GCS storage: {e}")
-
     t0 = time.time()
     steps = 0
     failure = None
@@ -122,19 +91,6 @@ def run_osworld_native(
                     with open(screenshot_path, "wb") as f:
                         f.write(screenshot_bytes)
                     logger.debug(f"Saved screenshot: {screenshot_path}")
-
-                    # Upload to GCS if available
-                    if gcs_storage and assessment_id:
-                        try:
-                            gcs_url = gcs_storage.upload_screenshot(
-                                assessment_id=assessment_id,
-                                step_number=step,
-                                local_path=screenshot_path
-                            )
-                            if gcs_url:
-                                logger.debug(f"Uploaded screenshot to GCS: {gcs_url}")
-                        except Exception as e:
-                            logger.warning(f"Failed to upload screenshot to GCS: {e}")
                 except Exception as e:
                     logger.warning(f"Failed to save screenshot: {e}")
 
@@ -265,7 +221,6 @@ def run_osworld(
     artifacts_dir: str | None = None,
     white_agent_url: str | None = None,
     osworld_task: Dict[str, Any] | None = None,
-    assessment_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Run OSWorld assessment with White Agent.
@@ -276,9 +231,8 @@ def run_osworld(
         artifacts_dir: Directory to save artifacts
         white_agent_url: URL of White Agent HTTP API
         osworld_task: Full OSWorld task config with evaluator (optional)
-        assessment_id: Assessment ID for GCS uploads (extracted from artifacts_dir if not provided)
 
     Returns:
         Dictionary with assessment results
     """
-    return run_osworld_native(task, white_decide, artifacts_dir, white_agent_url, osworld_task, assessment_id)
+    return run_osworld_native(task, white_decide, artifacts_dir, white_agent_url, osworld_task)

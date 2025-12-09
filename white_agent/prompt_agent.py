@@ -676,6 +676,23 @@ class PromptAgent:
                 "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"
             }
             logger.info("Generating content with GPT model: %s", self.model)
+
+            # GPT-5 models have different parameter requirements
+            if self.model.startswith("gpt-5"):
+                # max_tokens -> max_completion_tokens
+                if "max_tokens" in payload:
+                    payload["max_completion_tokens"] = payload.pop("max_tokens")
+
+                # GPT-5.1 defaults to reasoning_effort="none", which supports temperature/top_p
+                # Other reasoning levels (low/medium/high) do NOT support temperature/top_p
+                reasoning_effort = os.environ.get("GPT5_REASONING_EFFORT", "none")
+                payload["reasoning_effort"] = reasoning_effort
+
+                # temperature and top_p are only supported with reasoning_effort="none"
+                if reasoning_effort != "none":
+                    payload.pop("temperature", None)
+                    payload.pop("top_p", None)
+
             response = requests.post(
                 api_url,
                 headers=headers,

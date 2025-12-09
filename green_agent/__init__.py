@@ -7,7 +7,7 @@ Structure:
   - server.py: Main A2A FastAPI server
   - vm_manager.py: GCP VM lifecycle management
   - task_executor.py: Task execution
-  - supabase_storage.py, gcs_storage.py: Storage backends
+  - supabase_storage.py: Supabase storage for screenshots
 - models.py: Shared data models
 - osworld_adapter.py: OSWorld integration
 - osworld_client.py: OSWorld client

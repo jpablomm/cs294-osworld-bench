@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration from environment
-MODEL = os.environ.get("MODEL", os.environ.get("GPT4V_MODEL", "gpt-4o"))
+MODEL = os.environ.get("MODEL", os.environ.get("GPT5_MODEL", "gpt-5.1"))
 TEMPERATURE = float(os.environ.get("TEMPERATURE", os.environ.get("GPT4V_TEMPERATURE", "1.0")))
 OBSERVATION_TYPE = os.environ.get("OSWORLD_OBS_TYPE", "screenshot_a11y_tree")
 ACTION_SPACE = os.environ.get("ACTION_SPACE", "pyautogui")
