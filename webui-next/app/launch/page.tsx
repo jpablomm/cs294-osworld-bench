@@ -12,14 +12,19 @@ import {
   PlayCircle,
   Search,
   Loader2,
-  CheckCircle2,
+  Check,
+  X,
   TrendingUp,
   Clock,
   Zap,
   BarChart3,
   FlaskConical,
+  Square,
+  CheckSquare,
 } from "lucide-react";
 import type { Task } from "@/lib/api/types";
+
+const MAX_TASKS_PER_BATCH = 20;
 
 export default function LaunchPage() {
   const router = useRouter();
@@ -27,16 +32,22 @@ export default function LaunchPage() {
   const launchMutation = useLaunchAssessment();
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
 
   // Configuration state with validation
   const [maxSteps, setMaxSteps] = useState(15);
   const [numRuns, setNumRuns] = useState(1);
 
-  // Fetch stats for selected task
+  // Get selected tasks array from IDs
+  const selectedTasks = useMemo(() => {
+    if (!tasks) return [];
+    return tasks.filter((t) => selectedTaskIds.has(t.id));
+  }, [tasks, selectedTaskIds]);
+
+  // Fetch stats for first selected task (for preview)
   const { data: taskStats, isLoading: statsLoading } = useTaskStats(
-    selectedTask?.id || null
+    selectedTasks.length === 1 ? selectedTasks[0]?.id : null
   );
 
   // Get unique domains
@@ -71,6 +82,33 @@ export default function LaunchPage() {
     return filtered;
   }, [tasks, selectedDomain, searchQuery]);
 
+  // Selection helpers
+  const toggleTaskSelection = useCallback((task: Task) => {
+    setSelectedTaskIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(task.id)) {
+        newSet.delete(task.id);
+      } else if (newSet.size < MAX_TASKS_PER_BATCH) {
+        newSet.add(task.id);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const selectAllTasks = useCallback(() => {
+    const tasksToSelect = filteredTasks.slice(0, MAX_TASKS_PER_BATCH);
+    setSelectedTaskIds(new Set(tasksToSelect.map((t) => t.id)));
+  }, [filteredTasks]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedTaskIds(new Set());
+  }, []);
+
+  const isTaskSelected = useCallback(
+    (taskId: string) => selectedTaskIds.has(taskId),
+    [selectedTaskIds]
+  );
+
   // Input validation
   const handleMaxStepsChange = (value: string) => {
     const num = parseInt(value);
@@ -85,32 +123,32 @@ export default function LaunchPage() {
   };
 
   const handleLaunch = useCallback(async () => {
-    if (!selectedTask || launchMutation.isPending) return;
+    if (selectedTasks.length === 0 || launchMutation.isPending) return;
 
     try {
       const result = await launchMutation.mutateAsync({
-        task_id: selectedTask.id,
-        domain: selectedTask.domain,
+        task_ids: selectedTasks.map((t) => t.id),
+        domain: selectedTasks[0]?.domain,
         max_steps: maxSteps,
         vm_image: "osworld-gnome-v6",
         num_runs: numRuns,
       });
 
-      // Redirect based on number of runs
-      if (numRuns === 1 && result.assessment_id) {
-        router.push(`/assessment/${result.assessment_id}/live`);
-      } else if (result.batch_id) {
+      // Always redirect to batch view for multi-task or if batch_id is present
+      if (result.batch_id) {
         router.push(`/batch/${result.batch_id}`);
+      } else if (result.assessment_id) {
+        router.push(`/assessment/${result.assessment_id}/live`);
       }
     } catch (error) {
       console.error("Launch failed:", error);
     }
-  }, [selectedTask, launchMutation, maxSteps, numRuns, router]);
+  }, [selectedTasks, launchMutation, maxSteps, numRuns, router]);
 
   // Keyboard shortcut: Enter to launch
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && selectedTask && !launchMutation.isPending) {
+      if (e.key === "Enter" && selectedTasks.length > 0 && !launchMutation.isPending) {
         // Don't trigger if typing in an input
         if (
           e.target instanceof HTMLInputElement ||
@@ -124,7 +162,7 @@ export default function LaunchPage() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedTask, launchMutation.isPending, handleLaunch]);
+  }, [selectedTasks.length, launchMutation.isPending, handleLaunch]);
 
   return (
     <div className="container max-w-5xl mx-auto py-8">
@@ -133,7 +171,7 @@ export default function LaunchPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Launch Assessment</h1>
           <p className="text-muted-foreground">
-            Select a task and configure the assessment parameters
+            Select one or more tasks and configure the assessment parameters
           </p>
         </div>
 
@@ -145,9 +183,9 @@ export default function LaunchPage() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle>Select Task</CardTitle>
+                    <CardTitle>Select Tasks</CardTitle>
                     <CardDescription>
-                      Choose an OSWorld task to assess the agent on
+                      Choose one or more OSWorld tasks to assess the agent on
                     </CardDescription>
                   </div>
                   {/* Task count badge */}
@@ -192,6 +230,38 @@ export default function LaunchPage() {
 
                 <Separator />
 
+                {/* Selection Controls */}
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    {selectedTaskIds.size} task{selectedTaskIds.size !== 1 ? "s" : ""} selected
+                    {selectedTaskIds.size >= MAX_TASKS_PER_BATCH && (
+                      <span className="text-warning ml-2">(max {MAX_TASKS_PER_BATCH})</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={selectAllTasks}
+                      disabled={
+                        filteredTasks.length === 0 ||
+                        (filteredTasks.length <= MAX_TASKS_PER_BATCH &&
+                          filteredTasks.every((t) => selectedTaskIds.has(t.id)))
+                      }
+                    >
+                      Select All ({Math.min(filteredTasks.length, MAX_TASKS_PER_BATCH)})
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={clearSelection}
+                      disabled={selectedTaskIds.size === 0}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+
                 {/* Task List */}
                 <div className="space-y-2 max-h-[400px] overflow-y-auto">
                   {tasksLoading ? (
@@ -204,16 +274,30 @@ export default function LaunchPage() {
                     </p>
                   ) : (
                     filteredTasks.map((task) => (
-                      <button
+                      <div
                         key={task.id}
-                        onClick={() => setSelectedTask(task)}
-                        className={`w-full text-left p-4 rounded-lg border transition-colors ${
-                          selectedTask?.id === task.id
+                        onClick={() => toggleTaskSelection(task)}
+                        className={`w-full text-left p-4 rounded-lg border transition-colors cursor-pointer ${
+                          isTaskSelected(task.id)
                             ? "border-primary bg-primary/5"
                             : "border-border hover:border-primary/50 hover:bg-accent/50"
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-3">
+                          {/* Checkbox */}
+                          <div
+                            className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                              isTaskSelected(task.id)
+                                ? "bg-primary border-primary"
+                                : "border-muted-foreground/30"
+                            }`}
+                          >
+                            {isTaskSelected(task.id) && (
+                              <Check className="h-3 w-3 text-primary-foreground" />
+                            )}
+                          </div>
+
+                          {/* Task content */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
                               <p className="font-medium text-sm">{task.id}</p>
@@ -225,11 +309,8 @@ export default function LaunchPage() {
                               {task.instruction}
                             </p>
                           </div>
-                          {selectedTask?.id === task.id && (
-                            <CheckCircle2 className="h-5 w-5 text-primary flex-shrink-0" />
-                          )}
                         </div>
-                      </button>
+                      </div>
                     ))
                   )}
                 </div>
@@ -263,7 +344,7 @@ export default function LaunchPage() {
 
                 {/* Number of Runs */}
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Number of Runs</label>
+                  <label className="text-sm font-medium">Runs per Task</label>
                   <Input
                     type="number"
                     min={1}
@@ -272,85 +353,136 @@ export default function LaunchPage() {
                     onChange={(e) => handleNumRunsChange(e.target.value)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Run task multiple times for rolling average (1-10)
+                    Run each task multiple times (1-10)
                   </p>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Selected Task Preview with Stats */}
-            {selectedTask && (
+            {/* Selected Tasks Preview */}
+            {selectedTasks.length > 0 && (
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Selected Task</CardTitle>
+                  <CardTitle className="text-base">
+                    Selected Tasks ({selectedTasks.length})
+                  </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Task ID</p>
-                    <p className="text-sm font-medium">{selectedTask.id}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Domain</p>
-                    <Badge variant="secondary">{selectedTask.domain}</Badge>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Instruction</p>
-                    <p className="text-sm">{selectedTask.instruction}</p>
+                  {/* Task list */}
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {selectedTasks.map((task, index) => (
+                      <div
+                        key={task.id}
+                        className="flex items-center gap-2 text-sm group"
+                      >
+                        <span className="text-muted-foreground w-5 text-right">
+                          {index + 1}.
+                        </span>
+                        <span className="truncate flex-1" title={task.instruction}>
+                          {task.id}
+                        </span>
+                        <Badge variant="outline" className="text-xs flex-shrink-0">
+                          {task.domain}
+                        </Badge>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleTaskSelection(task);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
 
-                  {/* Evaluator Info */}
-                  {selectedTask.evaluator && (
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-                        <FlaskConical className="h-3 w-3" />
-                        Evaluation Method
-                      </p>
-                      <Badge variant="outline" className="font-mono text-xs">
-                        {selectedTask.evaluator.func}
-                      </Badge>
-                    </div>
+                  {/* Domain summary */}
+                  <div className="text-xs text-muted-foreground">
+                    Domains:{" "}
+                    {[...new Set(selectedTasks.map((t) => t.domain))].join(", ")}
+                  </div>
+
+                  {/* Single task stats */}
+                  {selectedTasks.length === 1 && (
+                    <>
+                      {/* Evaluator Info */}
+                      {selectedTasks[0].evaluator && (
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                            <FlaskConical className="h-3 w-3" />
+                            Evaluation Method
+                          </p>
+                          <Badge variant="outline" className="font-mono text-xs">
+                            {selectedTasks[0].evaluator.func}
+                          </Badge>
+                        </div>
+                      )}
+
+                      {/* Historical Stats */}
+                      {statsLoading ? (
+                        <div className="pt-2">
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : taskStats && taskStats.total_runs > 0 ? (
+                        <>
+                          <Separator />
+                          <div>
+                            <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+                              <BarChart3 className="h-3 w-3" />
+                              Historical Performance ({taskStats.total_runs} runs)
+                            </p>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="flex items-center gap-1.5 text-xs">
+                                <TrendingUp className="h-3 w-3 text-success" />
+                                <span className="text-muted-foreground">Success:</span>
+                                <span className="font-medium">{taskStats.success_rate}%</span>
+                              </div>
+                              <div className="flex items-center gap-1.5 text-xs">
+                                <Zap className="h-3 w-3 text-primary" />
+                                <span className="text-muted-foreground">Avg steps:</span>
+                                <span className="font-medium">{taskStats.avg_steps}</span>
+                              </div>
+                              <div className="flex items-center gap-1.5 text-xs">
+                                <Clock className="h-3 w-3 text-warning" />
+                                <span className="text-muted-foreground">Avg time:</span>
+                                <span className="font-medium">{taskStats.avg_time_sec}s</span>
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      ) : taskStats?.total_runs === 0 ? (
+                        <>
+                          <Separator />
+                          <p className="text-xs text-muted-foreground italic">
+                            No previous runs for this task
+                          </p>
+                        </>
+                      ) : null}
+                    </>
                   )}
 
-                  {/* Historical Stats */}
-                  {statsLoading ? (
-                    <div className="pt-2">
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : taskStats && taskStats.total_runs > 0 ? (
+                  {/* Multi-task summary */}
+                  {selectedTasks.length > 1 && (
                     <>
                       <Separator />
-                      <div>
-                        <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-                          <BarChart3 className="h-3 w-3" />
-                          Historical Performance ({taskStats.total_runs} runs)
-                        </p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="flex items-center gap-1.5 text-xs">
-                            <TrendingUp className="h-3 w-3 text-success" />
-                            <span className="text-muted-foreground">Success:</span>
-                            <span className="font-medium">{taskStats.success_rate}%</span>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-xs">
-                            <Zap className="h-3 w-3 text-primary" />
-                            <span className="text-muted-foreground">Avg steps:</span>
-                            <span className="font-medium">{taskStats.avg_steps}</span>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-xs">
-                            <Clock className="h-3 w-3 text-warning" />
-                            <span className="text-muted-foreground">Avg time:</span>
-                            <span className="font-medium">{taskStats.avg_time_sec}s</span>
-                          </div>
-                        </div>
+                      <div className="text-xs text-muted-foreground">
+                        Total assessments: {selectedTasks.length * numRuns}
+                        {numRuns > 1 && ` (${selectedTasks.length} tasks × ${numRuns} runs)`}
                       </div>
                     </>
-                  ) : taskStats?.total_runs === 0 ? (
-                    <>
-                      <Separator />
-                      <p className="text-xs text-muted-foreground italic">
-                        No previous runs for this task
-                      </p>
-                    </>
-                  ) : null}
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* No selection placeholder */}
+            {selectedTasks.length === 0 && (
+              <Card>
+                <CardContent className="py-8">
+                  <p className="text-sm text-muted-foreground text-center">
+                    Select tasks from the list to launch
+                  </p>
                 </CardContent>
               </Card>
             )}
@@ -359,7 +491,7 @@ export default function LaunchPage() {
             <Button
               size="lg"
               className="w-full"
-              disabled={!selectedTask || launchMutation.isPending}
+              disabled={selectedTasks.length === 0 || launchMutation.isPending}
               onClick={handleLaunch}
             >
               {launchMutation.isPending ? (
@@ -370,13 +502,13 @@ export default function LaunchPage() {
               ) : (
                 <>
                   <PlayCircle className="mr-2 h-4 w-4" />
-                  Launch Assessment
+                  Launch {selectedTasks.length} Task{selectedTasks.length !== 1 ? "s" : ""}
                 </>
               )}
             </Button>
 
             {/* Keyboard hint */}
-            {selectedTask && !launchMutation.isPending && (
+            {selectedTasks.length > 0 && !launchMutation.isPending && (
               <p className="text-xs text-muted-foreground text-center">
                 Press <kbd className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">Enter</kbd> to launch
               </p>

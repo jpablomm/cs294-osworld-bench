@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, BarChart3, PlayCircle, Trophy } from "lucide-react";
+import { Activity, BarChart3, PlayCircle, Trophy, Scale } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useHealth } from "@/lib/api/queries";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ const navigation = [
   { name: "Dashboard", href: "/", icon: BarChart3 },
   { name: "Launch", href: "/launch", icon: PlayCircle },
   { name: "Leaderboard", href: "/leaderboard", icon: Trophy },
+  { name: "Compare", href: "/compare", icon: Scale },
 ];
 
 export function Header() {

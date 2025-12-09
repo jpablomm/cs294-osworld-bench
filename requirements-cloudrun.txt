@@ -4,9 +4,11 @@
 # Core web framework
 fastapi==0.121.1
 uvicorn==0.30.6
+starlette>=0.27.0  # Required by A2AStarletteApplication
 pydantic==2.11.7
 python-multipart==0.0.19
 httpx==0.28.1
+sse-starlette>=1.6.0  # Required by a2a-sdk[http-server] for streaming
 
 # Image processing
 Pillow==10.4.0
@@ -31,8 +33,10 @@ google-cloud-compute==1.19.2
 google-cloud-storage==2.18.2
 google-auth==2.35.0
 
-# A2A protocol
-a2a==0.43
+# A2A protocol SDK (includes server components for JSON-RPC)
+# Note: a2a-sdk is the correct package for A2A protocol compliance
+# The old "a2a==0.43" package doesn't include server components
+a2a-sdk[http-server]>=0.3.8
 
 # AgentBeats controller - RE-ENABLED after successful local testing!
 # Controller works after installing missing OSWorld dependencies

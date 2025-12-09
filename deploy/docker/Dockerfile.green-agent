@@ -39,5 +39,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Run the A2A green agent directly
-CMD ["sh", "-c", "uvicorn green_agent.a2a.server:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]
+# Run the A2A SDK compliant green agent directly (JSON-RPC at POST /)
+CMD ["sh", "-c", "uvicorn green_agent.a2a.server_a2a:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]
