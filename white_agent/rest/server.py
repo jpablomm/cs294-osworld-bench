@@ -7,7 +7,6 @@ Uses PromptAgent for multi-model support (GPT-4V, Claude, Gemini, Qwen, etc.)
 """
 
 import logging
-import os
 import uuid
 from typing import Dict, Any
 
@@ -17,6 +16,18 @@ from dotenv import load_dotenv
 
 from white_agent.prompt_agent import PromptAgent
 from white_agent.core import parse_observation, parse_actions
+from white_agent.config import (
+    MODEL,
+    TEMPERATURE,
+    OBSERVATION_TYPE,
+    ACTION_SPACE,
+    MAX_TRAJECTORY_LENGTH,
+    MAX_TOKENS,
+    TOP_P,
+    WHITE_AGENT_HOST,
+    WHITE_AGENT_PORT,
+    get_agent_url,
+)
 
 load_dotenv()
 
@@ -26,14 +37,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration from environment
-MODEL = os.environ.get("MODEL", os.environ.get("GPT5_MODEL", "gpt-5.1"))
-TEMPERATURE = float(os.environ.get("TEMPERATURE", os.environ.get("GPT4V_TEMPERATURE", "1.0")))
-OBSERVATION_TYPE = os.environ.get("OSWORLD_OBS_TYPE", "screenshot_a11y_tree")
-ACTION_SPACE = os.environ.get("ACTION_SPACE", "pyautogui")
-MAX_TRAJECTORY_LENGTH = int(os.environ.get("MAX_TRAJECTORY_LENGTH", "3"))
-MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "1500"))
-TOP_P = float(os.environ.get("TOP_P", "0.9"))
+# NOTE: Loop detection is handled by the Green Agent (orchestrator), not here.
+# The Green Agent tracks actions and injects stuck_feedback into observations.
+# See: green_agent/a2a/server.py for A2A flow.
 
 # FastAPI app
 app = FastAPI(
@@ -108,9 +114,7 @@ class AgentCardResponse(BaseModel):
 
 def build_agent_url() -> str:
     """Build the agent URL from environment."""
-    host = os.environ.get("HOST", "localhost")
-    port = os.environ.get("PORT", "9002")
-    return os.environ.get("AGENT_URL", f"http://{host}:{port}")
+    return get_agent_url()
 
 
 @app.on_event("startup")
@@ -302,7 +306,9 @@ def decide(obs: Observation) -> Dict[str, Any]:
         # Inject stuck feedback into instruction if present
         instruction = obs.instruction
         if obs.stuck_feedback:
-            logger.warning(f"Stuck feedback received for frame {obs.frame_id}")
+            logger.warning(f"[LoopDetection] === STUCK FEEDBACK RECEIVED === Frame {obs.frame_id}")
+            logger.info(f"[LoopDetection] Modifying instruction to include recovery guidance")
+            logger.debug(f"[LoopDetection] Stuck feedback preview: {obs.stuck_feedback[:200]}...")
             instruction = f"{obs.stuck_feedback}\n\nOriginal task: {obs.instruction}"
 
         response, actions = agent.predict(instruction, obs_for_agent)
@@ -394,5 +400,4 @@ def debug_trajectory():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", "9002"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=WHITE_AGENT_HOST, port=WHITE_AGENT_PORT)

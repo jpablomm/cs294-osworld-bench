@@ -29,7 +29,7 @@ The LLM had no mechanism to detect that its actions weren't working and would re
 
 ## Solution Architecture
 
-We implemented a three-layer solution:
+We implemented a four-layer solution:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -43,8 +43,18 @@ We implemented a three-layer solution:
 │                          │                                   │
 │                          ▼                                   │
 │  ┌─────────────────────────────────────────────────────┐    │
+│  │         ElementBoundsParser                          │    │
+│  │  - Parses accessibility tree XML                     │    │
+│  │  - Extracts element coordinates and bounds           │    │
+│  │  - Finds nearby elements when click misses           │    │
+│  │  - Suggests correct center coordinates               │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                   │
+│                          ▼                                   │
+│  ┌─────────────────────────────────────────────────────┐    │
 │  │         Feedback Injection                           │    │
 │  │  - Injects stuck warnings into observations          │    │
+│  │  - Includes coordinate guidance from a11y tree       │    │
 │  │  - Modifies instruction with recovery guidance       │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
@@ -92,7 +102,51 @@ if status == "stuck":
 - Hotkey actions: Compare key combinations
 - Other actions: Compare by type
 
-### 2. Reflection Protocol (Prompt Improvements)
+### 2. ElementBoundsParser (`green_agent/element_bounds.py`)
+
+Parses accessibility tree XML to extract element bounds and provide coordinate guidance:
+
+```python
+from green_agent.element_bounds import (
+    ElementBoundsParser,
+    validate_click_coordinates,
+    generate_coordinate_guidance
+)
+
+# Parse accessibility tree
+parser = ElementBoundsParser(platform="ubuntu")
+elements = parser.parse(a11y_tree_xml)
+
+# Check if a click hits an element
+hit = parser.find_element_at(elements, click_x, click_y)
+
+# Find nearby elements if missed
+nearby = parser.find_nearby_elements(elements, click_x, click_y, max_distance=100)
+
+# Generate guidance message
+guidance = generate_coordinate_guidance(elements, click_x, click_y)
+```
+
+**Features:**
+- Parses XML accessibility tree format from OSWorld VM
+- Extracts element tag, name, text, position, and size
+- Calculates element center coordinates
+- Finds elements containing a point
+- Finds nearby elements sorted by distance
+- Generates human-readable coordinate suggestions
+
+**Example Guidance Output:**
+```
+Your click at (847, 686) missed all interactive elements.
+
+Nearby clickable elements:
+  - button "Save": click at (875, 700) [28px away]
+  - button "Cancel": click at (750, 700) [103px away]
+
+SUGGESTION: Try clicking at (875, 700) for "button "Save""
+```
+
+### 3. Reflection Protocol (Prompt Improvements)
 
 Added to `white_agent/prompts.py` in all main system prompts:
 
@@ -115,7 +169,7 @@ Before deciding your next action, you MUST reflect on:
 === END REFLECTION ===
 ```
 
-### 3. Feedback Injection
+### 4. Feedback Injection
 
 When stuck is detected, feedback is injected into the observation:
 
@@ -132,24 +186,36 @@ if obs.stuck_feedback:
     instruction = f"{obs.stuck_feedback}\n\nOriginal task: {obs.instruction}"
 ```
 
-### 4. Stuck Feedback Message
+### 5. Stuck Feedback Message (with Coordinate Guidance)
 
-When 3+ consecutive similar actions are detected:
+When 3+ consecutive similar actions are detected, the feedback now includes coordinate guidance from the accessibility tree:
 
 ```
 === STUCK LOOP DETECTED ===
 WARNING: You have attempted the same click at coordinates (847, 686)
 3 times without any visible change in the UI.
 
-This action is NOT working. You MUST try a DIFFERENT approach:
-1. Look carefully at the current screenshot
-2. Try clicking on a DIFFERENT element or location
-3. Try using a keyboard shortcut instead (Tab, Enter, Escape)
-4. If a dialog/popup appeared, interact with it first
-5. If the element is not visible, try scrolling
-6. If you cannot make progress, return FAIL
+This action is NOT working. You MUST try a DIFFERENT approach.
 
-DO NOT repeat the same action again.
+=== COORDINATE ANALYSIS ===
+Your click at (847, 686) missed all interactive elements.
+
+Nearby clickable elements:
+  - button "Save": click at (875, 700) [28px away]
+  - button "Cancel": click at (750, 700) [103px away]
+  - button "Print": click at (920, 700) [85px away]
+
+SUGGESTION: Try clicking at (875, 700) for "button "Save""
+=== END ANALYSIS ===
+
+RECOVERY OPTIONS:
+1. If a nearby element was suggested above, click its CENTER coordinates
+2. Try using a keyboard shortcut instead (Tab to focus, Enter to confirm)
+3. If a dialog/popup appeared, interact with it first
+4. If the element is not visible, try scrolling to find it
+5. If you cannot make progress, return FAIL
+
+DO NOT repeat the same action again. The next action MUST be different.
 === END WARNING ===
 ```
 
@@ -166,8 +232,9 @@ Environment variables:
 
 | File | Changes |
 |------|---------|
-| `green_agent/action_tracker.py` | **New file** - ActionTracker class |
-| `green_agent/osworld_adapter.py` | Integrated ActionTracker, feedback injection |
+| `green_agent/action_tracker.py` | **New file** - ActionTracker class with a11y integration |
+| `green_agent/element_bounds.py` | **New file** - ElementBoundsParser for coordinate guidance |
+| `green_agent/osworld_adapter.py` | Integrated ActionTracker, a11y tree passing, feedback injection |
 | `white_agent/prompts.py` | Added reflection protocol to 3 prompts |
 | `white_agent/rest/server.py` | Added `stuck_feedback` field, injection logic |
 
@@ -183,29 +250,33 @@ Step 4: Click (847, 686)
 Step 15: Max steps reached, task failed
 ```
 
-### After (with loop detection):
+### After (with loop detection + coordinate guidance):
 ```
-Step 1: Click (847, 686)
+Step 1: Click (847, 686) - misses Save button by 28px
 Step 2: Click (847, 686) → Warning issued
-Step 3: Click (847, 686) → STUCK DETECTED, feedback injected
-Step 4: Agent receives feedback, tries keyboard shortcut (Ctrl+P)
-Step 5: New dialog opens, agent proceeds
+Step 3: Click (847, 686) → STUCK DETECTED
+        → Feedback: "Nearby: button 'Save' at (875, 700)"
+Step 4: Agent clicks (875, 700) - correct coordinates!
+Step 5: Save dialog opens, agent proceeds
 ...
 Task completed successfully
 ```
 
 ## Comparison with OSWorld Maestro
 
-Our implementation is inspired by OSWorld's Maestro architecture but simplified:
+Our implementation is inspired by OSWorld's Maestro architecture but simplified, with a unique addition:
 
 | Feature | OSWorld Maestro | Our Implementation |
 |---------|-----------------|-------------------|
 | Loop detection | `rule_engine.py` | `action_tracker.py` |
 | Threshold | Configurable | Configurable (default: 3) |
-| Coordinate comparison | Excludes descriptive fields | Tolerance-based |
+| Coordinate comparison | Excludes descriptive fields | Tolerance-based (20px) |
+| **Coordinate guidance** | ❌ Not implemented | ✅ `element_bounds.py` - suggests correct coords |
 | Quality gates | Full evaluator LLM | Prompt-based guidance |
 | State machine | 7 states with transitions | Not implemented |
 | Replanning | Full replan on failure | FAIL signal only |
+
+**Note:** The coordinate guidance feature using accessibility tree parsing is our unique addition - OSWorld Maestro does not have this capability.
 
 ## Future Improvements (Phase 2-3)
 

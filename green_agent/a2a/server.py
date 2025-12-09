@@ -39,6 +39,32 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "vendor" / "OSWorld
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Import configuration
+from green_agent.config import (
+    ACTION_REPEAT_THRESHOLD,
+    ACTION_COORD_TOLERANCE,
+    WEBUI_SERVER_URL,
+    GREEN_AGENT_API_KEY,
+    GCP_PROJECT,
+    SETUP_STABILIZATION_WAIT,
+    EVAL_STABILIZATION_WAIT,
+    CLOUDRUN_HOST,
+    HTTPS_ENABLED,
+    GREEN_AGENT_HOST,
+    GREEN_AGENT_PORT,
+    get_agent_url,
+)
+
+# Import ActionTracker for loop detection
+try:
+    from green_agent.action_tracker import ActionTracker
+    LOOP_DETECTION_ENABLED = True
+    logger.info("[LoopDetection] ActionTracker imported successfully")
+except ImportError:
+    ActionTracker = None
+    LOOP_DETECTION_ENABLED = False
+    logger.warning("[LoopDetection] ActionTracker not available - loop detection disabled")
+
 
 # A2A Protocol Models (following A2A SDK: a2a.types)
 # These models must match the a2a SDK's AgentCard schema exactly for validation to pass
@@ -119,9 +145,8 @@ def get_vm_manager():
     global _vm_manager
     if _vm_manager is None:
         from .vm_manager import VMManager
-        gcp_project = os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
-        logger.info(f"Initializing VMManager with project_id from env: {gcp_project}")
-        _vm_manager = VMManager(project_id=gcp_project)
+        logger.info(f"Initializing VMManager with project_id from config: {GCP_PROJECT}")
+        _vm_manager = VMManager(project_id=GCP_PROJECT)
         logger.info(f"VMManager initialized with project_id: {_vm_manager.project_id}")
     return _vm_manager
 
@@ -207,12 +232,7 @@ except Exception as e:
 atexit.register(_cleanup_all_vms)
 
 
-# WebUI server configuration for real-time event pushing
-WEBUI_SERVER_URL = os.getenv("WEBUI_SERVER_URL", "http://localhost:3001")
-
-# API key authentication for security (optional but recommended for production)
-# Set GREEN_AGENT_API_KEY environment variable to enable authentication
-GREEN_AGENT_API_KEY = os.getenv("GREEN_AGENT_API_KEY")
+# WebUI server configuration and API key authentication are imported from green_agent.config
 
 async def verify_api_key(x_api_key: Optional[str] = Header(None)):
     """
@@ -268,21 +288,15 @@ def _build_agent_card(request_url: str = None) -> AgentCard:
     """Build agent card with dynamic URL based on request or environment"""
     # Try to determine the agent URL
     # Priority: CLOUDRUN_HOST > request URL > HOST:PORT
-    cloudrun_host = os.getenv("CLOUDRUN_HOST")
-    https_enabled = os.getenv("HTTPS_ENABLED", "").lower() in ("true", "1", "yes")
-
-    if cloudrun_host:
+    if CLOUDRUN_HOST:
         # Use explicit Cloud Run host (e.g., for cloudflared forwarding)
-        protocol = "https" if https_enabled else "http"
-        agent_url = f"{protocol}://{cloudrun_host}"
+        protocol = "https" if HTTPS_ENABLED else "http"
+        agent_url = f"{protocol}://{CLOUDRUN_HOST}"
     elif request_url:
         agent_url = request_url.split("/.well-known")[0].split("/agent-card")[0]
     else:
-        # Fallback to environment or default
-        host = os.getenv("AGENT_HOST", os.getenv("HOST", "0.0.0.0"))
-        port = os.getenv("PORT", os.getenv("AGENT_PORT", "8080"))
-        protocol = "https" if https_enabled else "http"
-        agent_url = f"{protocol}://{host}:{port}"
+        # Fallback to config defaults
+        agent_url = get_agent_url()
 
     return AgentCard(
         name="OSWorld Assessment Agent",
@@ -663,16 +677,15 @@ async def _execute_assessment(
 
                 # Wait for environment to stabilize after setup
                 # OSWorld runners use 60s, but we use 30s as a balance
-                stabilization_wait = int(os.getenv("SETUP_STABILIZATION_WAIT", "30"))
-                if stabilization_wait > 0:
-                    logger.info(f"Waiting {stabilization_wait}s for environment to stabilize after setup...")
+                if SETUP_STABILIZATION_WAIT > 0:
+                    logger.info(f"Waiting {SETUP_STABILIZATION_WAIT}s for environment to stabilize after setup...")
                     await _push_event_to_webui(callback_url, {
                         "type": "stabilization_wait",
                         "timestamp": datetime.utcnow().isoformat(),
-                        "duration_sec": stabilization_wait,
-                        "message": f"Waiting {stabilization_wait}s for environment to stabilize"
+                        "duration_sec": SETUP_STABILIZATION_WAIT,
+                        "message": f"Waiting {SETUP_STABILIZATION_WAIT}s for environment to stabilize"
                     })
-                    await asyncio.sleep(stabilization_wait)
+                    await asyncio.sleep(SETUP_STABILIZATION_WAIT)
                     logger.info("Stabilization wait complete")
 
             except Exception as e:
@@ -743,10 +756,9 @@ async def _execute_assessment(
         if osworld_task and "evaluator" in osworld_task:
             # Wait for environment to settle before evaluation
             # OSWorld runners use 20s to let UI animations complete
-            eval_wait = int(os.getenv("EVAL_STABILIZATION_WAIT", "10"))
-            if eval_wait > 0:
-                logger.info(f"Waiting {eval_wait}s for environment to settle before evaluation...")
-                await asyncio.sleep(eval_wait)
+            if EVAL_STABILIZATION_WAIT > 0:
+                logger.info(f"Waiting {EVAL_STABILIZATION_WAIT}s for environment to settle before evaluation...")
+                await asyncio.sleep(EVAL_STABILIZATION_WAIT)
 
             logger.info("Running OSWorld evaluation...")
 
@@ -1008,6 +1020,8 @@ def _build_osworld_tool_descriptions(vm_ip: str) -> list[Dict[str, Any]]:
         "execute_python": (f"{osworld_base_url}/execute", "POST"),
         "execute_command": (f"{osworld_base_url}/execute", "POST"),
         "click": (f"{osworld_base_url}/action", "POST"),
+        "double_click": (f"{osworld_base_url}/action", "POST"),
+        "right_click": (f"{osworld_base_url}/action", "POST"),
         "type_text": (f"{osworld_base_url}/action", "POST"),
         "hotkey": (f"{osworld_base_url}/action", "POST"),
         "scroll": (f"{osworld_base_url}/action", "POST"),
@@ -1211,6 +1225,187 @@ def _build_osworld_tool_descriptions(vm_ip: str) -> list[Dict[str, Any]]:
             "metadata": {
                 "category": "action",
                 "tags": ["mouse", "click", "interaction"],
+                "complexity": "simple",
+                "safety_level": "safe"
+            }
+        },
+        {
+            "name": "double_click",
+            "description": "Perform a double mouse click at specific screen coordinates. Useful for opening files, selecting words, or activating UI elements that require double-clicking.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {
+                        "type": "integer",
+                        "description": "Horizontal position in pixels from left edge (0-1920)",
+                        "minimum": 0,
+                        "maximum": 1920
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Vertical position in pixels from top edge (0-1080)",
+                        "minimum": 0,
+                        "maximum": 1080
+                    }
+                },
+                "required": ["x", "y"]
+            },
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success", "error"]},
+                        "message": {"type": "string"}
+                    }
+                },
+                "description": "Confirmation of double-click execution"
+            },
+            "examples": [
+                {
+                    "description": "Double-click to open a file",
+                    "input": {"x": 500, "y": 300},
+                    "output": {"status": "success", "message": "Double-clicked at (500, 300)"}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "x": {
+                        "validator": "coordinate",
+                        "bounds": {"min": 0, "max": 1920}
+                    },
+                    "y": {
+                        "validator": "coordinate",
+                        "bounds": {"min": 0, "max": 1080}
+                    }
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["mouse", "double-click", "interaction"],
+                "complexity": "simple",
+                "safety_level": "safe"
+            }
+        },
+        {
+            "name": "right_click",
+            "description": "Perform a right mouse click at specific screen coordinates. Opens context menus and shows additional options for UI elements.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {
+                        "type": "integer",
+                        "description": "Horizontal position in pixels from left edge (0-1920)",
+                        "minimum": 0,
+                        "maximum": 1920
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Vertical position in pixels from top edge (0-1080)",
+                        "minimum": 0,
+                        "maximum": 1080
+                    }
+                },
+                "required": ["x", "y"]
+            },
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success", "error"]},
+                        "message": {"type": "string"}
+                    }
+                },
+                "description": "Confirmation of right-click execution"
+            },
+            "examples": [
+                {
+                    "description": "Right-click to open context menu",
+                    "input": {"x": 600, "y": 400},
+                    "output": {"status": "success", "message": "Right-clicked at (600, 400)"}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "x": {
+                        "validator": "coordinate",
+                        "bounds": {"min": 0, "max": 1920}
+                    },
+                    "y": {
+                        "validator": "coordinate",
+                        "bounds": {"min": 0, "max": 1080}
+                    }
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["mouse", "right-click", "context-menu"],
+                "complexity": "simple",
+                "safety_level": "safe"
+            }
+        },
+        {
+            "name": "scroll",
+            "description": "Scroll the mouse wheel up or down. Positive values scroll up, negative values scroll down. Use this for scrolling through web pages, documents, or lists.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount": {
+                        "type": "integer",
+                        "description": "Scroll amount in 'clicks'. Positive scrolls up, negative scrolls down. Typical values: 3 for small scroll, 10 for page scroll.",
+                        "minimum": -100,
+                        "maximum": 100
+                    },
+                    "x": {
+                        "type": "integer",
+                        "description": "Optional X coordinate to scroll at (defaults to current position)",
+                        "minimum": 0,
+                        "maximum": 1920
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Optional Y coordinate to scroll at (defaults to current position)",
+                        "minimum": 0,
+                        "maximum": 1080
+                    }
+                },
+                "required": ["amount"]
+            },
+            "returns": {
+                "content_type": "application/json",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["success", "error"]},
+                        "message": {"type": "string"}
+                    }
+                },
+                "description": "Confirmation of scroll execution"
+            },
+            "examples": [
+                {
+                    "description": "Scroll down a page",
+                    "input": {"amount": -5},
+                    "output": {"status": "success", "message": "Scrolled -5 clicks"}
+                },
+                {
+                    "description": "Scroll up",
+                    "input": {"amount": 3},
+                    "output": {"status": "success", "message": "Scrolled 3 clicks"}
+                }
+            ],
+            "validation": {
+                "parameter_rules": {
+                    "amount": {
+                        "validator": "integer",
+                        "bounds": {"min": -100, "max": 100}
+                    }
+                }
+            },
+            "metadata": {
+                "category": "action",
+                "tags": ["mouse", "scroll", "navigation"],
                 "complexity": "simple",
                 "safety_level": "safe"
             }
@@ -1739,9 +1934,28 @@ async def _execute_with_white_agent(
                 }
             }
 
+            # Initialize ActionTracker for loop detection
+            action_tracker = None
+            stuck_feedback = None
+            if LOOP_DETECTION_ENABLED and ActionTracker:
+                action_tracker = ActionTracker(
+                    threshold=ACTION_REPEAT_THRESHOLD,
+                    coordinate_tolerance=ACTION_COORD_TOLERANCE
+                )
+                logger.info(f"[LoopDetection] ActionTracker initialized: threshold={ACTION_REPEAT_THRESHOLD}, tolerance={ACTION_COORD_TOLERANCE}px")
+
             # Assessment loop
             while step < max_steps:
                 logger.info(f"Step {step}/{max_steps}")
+
+                # === LOOP DETECTION: Inject stuck feedback if detected in previous step ===
+                if stuck_feedback:
+                    logger.warning(f"[LoopDetection] === INJECTING STUCK FEEDBACK === Step {step}")
+                    original_instruction = current_task["metadata"]["observation"]["instruction"]
+                    modified_instruction = f"{stuck_feedback}\n\nOriginal task: {original_instruction}"
+                    current_task["metadata"]["observation"]["instruction"] = modified_instruction
+                    logger.debug(f"[LoopDetection] Feedback preview: {stuck_feedback[:200]}...")
+                    stuck_feedback = None  # Clear after injecting
 
                 # === PHASE 3: Enhanced Message Tracking ===
                 # Track message send timestamp
@@ -1816,6 +2030,26 @@ async def _execute_with_white_agent(
                 is_done = message["metadata"].get("done", False)
 
                 logger.info(f"White agent action: {action['op']}")
+
+                # === LOOP DETECTION: Track action for repeated pattern detection ===
+                if action_tracker and action["op"] != "done":
+                    # Update action tracker with current accessibility tree for coordinate guidance
+                    if accessibility_tree:
+                        action_tracker.set_accessibility_tree(accessibility_tree)
+                        logger.debug(f"[LoopDetection] A11y tree set for step {step} ({len(accessibility_tree)} chars)")
+
+                    # Pass action directly - ActionTracker now uses op/args format
+                    status, feedback = action_tracker.add_action(action)
+                    if status == "stuck":
+                        logger.warning(f"[LoopDetection] === STUCK LOOP DETECTED === Step {step}")
+                        logger.warning(f"[LoopDetection] Repeated {action_tracker.repeat_count} times (threshold: {ACTION_REPEAT_THRESHOLD})")
+                        stuck_feedback = feedback
+                        logger.info(f"[LoopDetection] {action_tracker.get_action_history_summary()}")
+                    elif status == "warning":
+                        logger.info(f"[LoopDetection] WARNING: Step {step} - action repeated {action_tracker.repeat_count} times")
+                        stuck_feedback = feedback
+                    else:
+                        logger.debug(f"[LoopDetection] Step {step} - action tracking status: {status}")
 
                 # === PHASE 3: Build Enhanced Message Data ===
                 message_data = {
@@ -2379,13 +2613,8 @@ def list_assessments():
 # Support running directly with environment variables for AgentBeats controller
 if __name__ == "__main__":
     import uvicorn
-    import os
 
-    # AgentBeats controller sets these environment variables
-    host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("AGENT_PORT", "8001"))
-
-    logger.info(f"Starting Green Agent on {host}:{port}")
+    logger.info(f"Starting Green Agent on {GREEN_AGENT_HOST}:{GREEN_AGENT_PORT}")
     logger.info("AgentBeats controller compatible - respects HOST and AGENT_PORT environment variables")
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=GREEN_AGENT_HOST, port=GREEN_AGENT_PORT)

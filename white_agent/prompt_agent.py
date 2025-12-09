@@ -18,6 +18,15 @@ from io import BytesIO
 from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 
+from white_agent.config import (
+    get_azure_openai_api_key,
+    get_azure_openai_endpoint,
+    get_openai_base_url,
+    get_reasoning_effort,
+    get_genai_api_key,
+    get_groq_api_key,
+)
+
 import backoff
 import requests
 import tiktoken
@@ -321,6 +330,13 @@ class PromptAgent:
         """
         Predict the next action(s) based on the current observation.
         """
+        # Detect if stuck feedback is present in the instruction
+        if "STUCK LOOP DETECTED" in instruction:
+            logger.warning("[LoopDetection] === PROCESSING STUCK INSTRUCTION ===")
+            logger.info("[LoopDetection] LLM will receive recovery guidance with coordinate suggestions")
+        elif "COORDINATE ANALYSIS" in instruction:
+            logger.info("[LoopDetection] Instruction contains coordinate guidance from a11y tree")
+
         system_message = self.system_message + "\nYou are asked to complete the following task: {}".format(instruction)
 
         # Prepare the payload for the API call
@@ -632,8 +648,8 @@ class PromptAgent:
 
             # Load environment variables
             load_dotenv()
-            api_key = os.getenv('AZURE_OPENAI_API_KEY')
-            openai_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+            api_key = get_azure_openai_api_key()
+            openai_endpoint = get_azure_openai_endpoint()
             #logger.info("Openai endpoint: %s", openai_endpoint)
 
             headers = {
@@ -668,7 +684,7 @@ class PromptAgent:
                 return response.json()['choices'][0]['message']['content']
         elif self.model.startswith("gpt"):
             # Support custom OpenAI base URL via environment variable
-            base_url = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com')
+            base_url = get_openai_base_url()
             # Smart handling: avoid duplicate /v1 if base_url already ends with /v1
             api_url = f"{base_url}/chat/completions" if base_url.endswith('/v1') else f"{base_url}/v1/chat/completions"
             headers = {
@@ -685,7 +701,7 @@ class PromptAgent:
 
                 # GPT-5.1 defaults to reasoning_effort="none", which supports temperature/top_p
                 # Other reasoning levels (low/medium/high) do NOT support temperature/top_p
-                reasoning_effort = os.environ.get("GPT5_REASONING_EFFORT", "none")
+                reasoning_effort = get_reasoning_effort()
                 payload["reasoning_effort"] = reasoning_effort
 
                 # temperature and top_p are only supported with reasoning_effort="none"
@@ -934,7 +950,7 @@ class PromptAgent:
                 # gemini_messages[-1]['parts'][1].save("output.png", "PNG")
 
             # print(gemini_messages)
-            api_key = os.environ.get("GENAI_API_KEY")
+            api_key = get_genai_api_key()
             assert api_key is not None, "Please set the GENAI_API_KEY environment variable"
             genai.configure(api_key=api_key)
             logger.info("Generating content with Gemini model: %s", self.model)
@@ -997,7 +1013,7 @@ class PromptAgent:
                 system_instruction = gemini_messages[0]['parts'][0]
                 gemini_messages.pop(0)
 
-            api_key = os.environ.get("GENAI_API_KEY")
+            api_key = get_genai_api_key()
             assert api_key is not None, "Please set the GENAI_API_KEY environment variable"
             genai.configure(api_key=api_key)
             logger.info("Generating content with Gemini model: %s", self.model)
@@ -1058,7 +1074,7 @@ class PromptAgent:
 
             # The implementation based on Groq API
             client = Groq(
-                api_key=os.environ.get("GROQ_API_KEY"),
+                api_key=get_groq_api_key(),
             )
 
             flag = 0

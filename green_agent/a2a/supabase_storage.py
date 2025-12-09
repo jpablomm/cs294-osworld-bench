@@ -1,16 +1,14 @@
 """
 Supabase Storage helper for uploading screenshots and artifacts
 """
-import os
 import logging
 from typing import Optional
 from supabase import create_client, Client
 
+from green_agent.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
+
 logger = logging.getLogger(__name__)
 
-# Supabase configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 STORAGE_BUCKET = "screenshots"
 
 # Initialize Supabase client

@@ -11,9 +11,10 @@ This module contains:
 import base64
 import json
 import logging
-import os
 import re
 from typing import Dict, Any
+
+from white_agent.config import get_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +130,9 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
     if match := re.match(r'(?:pyautogui\.)?rightClick\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
         return {"op": "right_click", "args": {"x": int(match.group(1)), "y": int(match.group(2))}}
 
-    # Parse type/write actions
+    # Parse type/write actions (output type_text to match green agent tool name)
     if match := re.match(r'(?:pyautogui\.)?(?:typewrite|write|type_text)\(["\'](.+?)["\']\)', actions_str):
-        return {"op": "type", "args": {"text": match.group(1)}}
+        return {"op": "type_text", "args": {"text": match.group(1)}}
 
     # Parse hotkey actions
     if match := re.match(r'(?:pyautogui\.)?hotkey\(["\'](.+?)["\'],\s*["\'](.+?)["\']\)', actions_str):
@@ -157,20 +158,4 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
 
 def build_agent_url() -> str:
     """Build agent URL from environment variables."""
-    # Check for AGENT_URL first (set by AgentBeats controller)
-    agent_url = os.getenv("AGENT_URL")
-    if agent_url:
-        return agent_url
-
-    # Build from components
-    cloudrun_host = os.getenv("CLOUDRUN_HOST")
-    https_enabled = os.getenv("HTTPS_ENABLED", "").lower() in ("true", "1", "yes")
-
-    if cloudrun_host:
-        protocol = "https" if https_enabled else "http"
-        return f"{protocol}://{cloudrun_host}"
-    else:
-        host = os.getenv("AGENT_HOST", os.getenv("HOST", "0.0.0.0"))
-        port = os.getenv("PORT", os.getenv("AGENT_PORT", "8080"))
-        protocol = "https" if https_enabled else "http"
-        return f"{protocol}://{host}:{port}"
+    return get_agent_url()
