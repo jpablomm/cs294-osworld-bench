@@ -226,12 +226,9 @@ def handle_task(task: A2ATask) -> A2AMessage:
         # Get prediction
         response, actions = agent.predict(instruction, obs_for_agent)
 
-        # Parse actions
-        if isinstance(actions, list):
-            actions_str = actions[0] if actions else "DONE"
-        else:
-            actions_str = actions
-        action = parse_actions(actions_str)
+        # Parse actions using core.py's robust parser directly on raw response
+        # It handles JSON, pyautogui code, DONE/FAIL, and code blocks
+        action = parse_actions(response)
 
         # Update context
         context["step"] += 1
@@ -252,7 +249,7 @@ def handle_task(task: A2ATask) -> A2AMessage:
                 "action": action,
                 "step": step,
                 "done": task_done,
-                "raw_actions": actions_str
+                "raw_response": response
             }
         )
 
@@ -313,12 +310,9 @@ def decide(obs: Observation) -> Dict[str, Any]:
 
         response, actions = agent.predict(instruction, obs_for_agent)
 
-        if isinstance(actions, list):
-            actions_str = actions[0] if actions else "DONE"
-        else:
-            actions_str = actions
-
-        return parse_actions(actions_str)
+        # Parse actions using core.py's robust parser directly on raw response
+        # It handles JSON, pyautogui code, DONE/FAIL, and code blocks
+        return parse_actions(response)
 
     except Exception as e:
         logger.error(f"Decide failed: {e}", exc_info=True)

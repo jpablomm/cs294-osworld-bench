@@ -10,7 +10,6 @@ Structure:
   - supabase_storage.py: Supabase storage for screenshots
 - action_tracker.py: Loop detection for stuck agents
 - element_bounds.py: UI element coordinate extraction from a11y tree
-- osworld_client.py: OSWorld REST API client
 - osworld_evaluator.py: OSWorld evaluation
 - llm_judge.py: LLM-based evaluation fallback
 

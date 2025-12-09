@@ -155,19 +155,16 @@ class PromptAgentExecutor(AgentExecutor):
                 logger.info(f"Calling PromptAgent ({MODEL}) with instruction: {instruction[:80]}...")
                 response, actions = agent.predict(instruction, obs_for_agent)
 
-                # Parse actions
-                if isinstance(actions, list):
-                    actions_str = actions[0] if actions else "DONE"
-                else:
-                    actions_str = actions
-                action = parse_actions(actions_str)
+                # Parse actions using core.py's robust parser directly on raw response
+                # It handles JSON, pyautogui code, DONE/FAIL, and code blocks
+                action = parse_actions(response)
 
                 # Build response
                 result = {
                     "action": action,
                     "reasoning": response,
-                    "raw_actions": actions_str,
-                    "done": action.get("op") == "done" or "DONE" in str(actions_str)
+                    "raw_response": response,
+                    "done": action.get("op") == "done"
                 }
                 response_text = json.dumps(result)
             else:
