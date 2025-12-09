@@ -94,6 +94,7 @@ class Observation(BaseModel):
     accessibility_tree: str | None = None
     done: bool = False
     reset_before: bool = False  # If True, reset agent trajectory before processing
+    stuck_feedback: str | None = None  # Feedback when agent is stuck in a loop
 
 
 class AgentCardResponse(BaseModel):
@@ -298,7 +299,13 @@ def decide(obs: Observation) -> Dict[str, Any]:
         if obs.accessibility_tree:
             obs_for_agent["accessibility_tree"] = obs.accessibility_tree
 
-        response, actions = agent.predict(obs.instruction, obs_for_agent)
+        # Inject stuck feedback into instruction if present
+        instruction = obs.instruction
+        if obs.stuck_feedback:
+            logger.warning(f"Stuck feedback received for frame {obs.frame_id}")
+            instruction = f"{obs.stuck_feedback}\n\nOriginal task: {obs.instruction}"
+
+        response, actions = agent.predict(instruction, obs_for_agent)
 
         if isinstance(actions, list):
             actions_str = actions[0] if actions else "DONE"

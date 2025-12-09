@@ -1,6 +1,8 @@
 import os, time, base64, io, logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from PIL import Image
+
+from .action_tracker import ActionTracker
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,13 @@ def run_osworld_native(
     failure = None
     max_steps = OSWORLD_MAX_STEPS
 
+    # Initialize action tracker for loop detection
+    action_tracker = ActionTracker(
+        threshold=int(os.environ.get("ACTION_REPEAT_THRESHOLD", "3")),
+        coordinate_tolerance=int(os.environ.get("ACTION_COORD_TOLERANCE", "20"))
+    )
+    stuck_feedback: Optional[str] = None  # Feedback to inject when stuck detected
+
     try:
         # Initial screenshot to verify display is working
         initial_screenshot = client.screenshot()
@@ -105,6 +114,13 @@ def run_osworld_native(
             if obs_obj.accessibility_tree:
                 obs_for_white["accessibility_tree"] = obs_obj.accessibility_tree
 
+            # Inject stuck feedback if detected in previous step
+            if stuck_feedback:
+                obs_for_white["stuck_feedback"] = stuck_feedback
+                obs_for_white["instruction"] = f"{stuck_feedback}\n\nOriginal task: {task.get('instruction', '')}"
+                logger.warning(f"Injecting stuck feedback into observation")
+                stuck_feedback = None  # Clear after injecting
+
             # Get action from white agent
             try:
                 action = white_decide(obs_for_white)
@@ -113,6 +129,17 @@ def run_osworld_native(
                 failure = f"white_agent_error: {e}"
                 logger.error(f"White agent error: {e}")
                 break
+
+            # Track action for loop detection
+            status, feedback = action_tracker.add_action(action)
+            if status == "stuck":
+                logger.warning(f"STUCK LOOP DETECTED at step {step}: {action_tracker.repeat_count} repeated actions")
+                stuck_feedback = feedback
+                # Log action history for debugging
+                logger.info(action_tracker.get_action_history_summary())
+            elif status == "warning":
+                logger.info(f"Action repeat warning at step {step}")
+                stuck_feedback = feedback
 
             # Execute action in OSWorld
             action_type = action.get("action_type", "")
