@@ -20,6 +20,9 @@ a2a==0.43
 # OpenAI API (needed by OSWorld PromptAgent)
 openai==1.59.3
 
+# Anthropic API (needed for Claude models - Sonnet 4.5, Opus 4, etc.)
+anthropic>=0.40.0
+
 # Requests (needed by OSWorld agents)
 requests==2.32.3
 
