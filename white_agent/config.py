@@ -18,6 +18,7 @@ class AgentType(str, Enum):
     QWEN = "qwen"
     O3 = "o3"
     GEMINI = "gemini"
+    LANGCHAIN = "langchain"
 
 
 class AgentConfig(BaseModel):
@@ -169,6 +170,7 @@ class AgentConfig(BaseModel):
             AgentType.CLAUDE: "ANTHROPIC_API_KEY",
             AgentType.QWEN: "DASHSCOPE_API_KEY",
             AgentType.GEMINI: "GOOGLE_API_KEY",
+            AgentType.LANGCHAIN: "OPENAI_API_KEY",
         }
         env_var = env_vars.get(AgentType(self.agent_type))
         if env_var:

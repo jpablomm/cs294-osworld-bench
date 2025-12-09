@@ -120,7 +120,7 @@ class LangChainAgent(BaseAgent):
             })
 
         # Call LLM
-        response = self._llm.invoke(messages)
+        response = self._llm.invoke({"messages": messages})
         response_text = response.content
 
         # Parse response

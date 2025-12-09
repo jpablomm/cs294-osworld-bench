@@ -32,3 +32,8 @@ python-pptx
 pypdf
 rapidfuzz
 
+#LangChain White Agent Dependencies
+langchain
+langchain-openai
+deepagents
+tavily-python
