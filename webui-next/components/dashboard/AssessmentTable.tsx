@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { CheckCircle2, XCircle, Clock, ExternalLink, Bot } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, ExternalLink, Bot, Radio } from "lucide-react";
 import type { Assessment } from "@/lib/api/types";
 import type { EvaluationResult } from "@/lib/types";
 import { formatDistanceToNow } from "date-fns";
@@ -48,6 +48,7 @@ export function AssessmentTable({ assessments, isLoading }: AssessmentTableProps
           <TableRow>
             <TableHead>Status</TableHead>
             <TableHead>Task ID</TableHead>
+            <TableHead>Model</TableHead>
             <TableHead>Domain</TableHead>
             <TableHead className="text-center">Steps</TableHead>
             <TableHead className="text-center">Success</TableHead>
@@ -96,6 +97,13 @@ export function AssessmentTable({ assessments, isLoading }: AssessmentTableProps
                   <div className="truncate" title={assessment.task_id}>
                     {assessment.task_id}
                   </div>
+                </TableCell>
+
+                {/* Model */}
+                <TableCell>
+                  <span className="text-xs font-mono text-muted-foreground">
+                    {assessment.config?.model || "—"}
+                  </span>
                 </TableCell>
 
                 {/* Domain */}
@@ -162,11 +170,19 @@ export function AssessmentTable({ assessments, isLoading }: AssessmentTableProps
 
                 {/* Actions */}
                 <TableCell className="text-right">
-                  <Link href={`/assessment/${assessment.id}`}>
-                    <Button variant="ghost" size="sm">
-                      <ExternalLink className="h-4 w-4" />
-                    </Button>
-                  </Link>
+                  {assessment.status === "running" ? (
+                    <Link href={`/assessment/${assessment.id}/live`}>
+                      <Button variant="ghost" size="sm" className="text-green-500 hover:text-green-600">
+                        <Radio className="h-4 w-4 animate-pulse" />
+                      </Button>
+                    </Link>
+                  ) : (
+                    <Link href={`/assessment/${assessment.id}`}>
+                      <Button variant="ghost" size="sm">
+                        <ExternalLink className="h-4 w-4" />
+                      </Button>
+                    </Link>
+                  )}
                 </TableCell>
               </TableRow>
             );

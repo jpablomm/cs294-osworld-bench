@@ -65,6 +65,9 @@ async function launchTaskToGreenAgent(
         ],
         messageId: assessmentId,
       },
+      configuration: {
+        blocking: false,  // Return immediately, don't wait for task completion
+      },
       metadata: {
         osworld_task_id: task.source_id || task.id,
         osworld_task: {
@@ -75,29 +78,33 @@ async function launchTaskToGreenAgent(
         },
         white_agent_url: agentConfig?.white_agent_url || WHITE_AGENT_URL,
         callback_url: `${process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"}/api/internal/events/${assessmentId}`,
-        config: agentConfig,
+        agent_config: agentConfig,  // Renamed from 'config' to avoid collision with executor's config parsing
       },
     },
   };
 
-  const greenAgentResponse = await fetch(`${GREEN_AGENT_URL}/`, {
+  console.log(`[LaunchTask] Sending A2A request to ${GREEN_AGENT_URL}/ for assessment ${assessmentId}`);
+
+  // Fire-and-forget: Send the request but don't wait for the response
+  // The A2A server may not support non-blocking mode, so we just fire the request
+  // and let the callback_url handle status updates
+  fetch(`${GREEN_AGENT_URL}/`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-API-Key": GREEN_AGENT_API_KEY,
     },
     body: JSON.stringify(a2aRequest),
-  });
+  })
+    .then(async (response) => {
+      const body = await response.json().catch(() => ({}));
+      console.log(`[LaunchTask] Green Agent response for ${assessmentId}:`, response.status, body);
+    })
+    .catch((error) => {
+      console.error(`[LaunchTask] Green Agent request failed for ${assessmentId}:`, error.message);
+    });
 
-  const jsonRpcResponse = await greenAgentResponse.json();
-
-  if (jsonRpcResponse.error) {
-    throw new Error(`Green Agent failed: ${jsonRpcResponse.error.message || JSON.stringify(jsonRpcResponse.error)}`);
-  }
-
-  if (!greenAgentResponse.ok) {
-    throw new Error(`Green Agent failed: ${JSON.stringify(jsonRpcResponse)}`);
-  }
+  console.log(`[LaunchTask] Request sent for ${assessmentId} (fire-and-forget)`);
 }
 
 /**
@@ -105,8 +112,10 @@ async function launchTaskToGreenAgent(
  * Launch new assessment(s) - supports both single task and multi-task
  */
 export async function POST(request: NextRequest) {
+  console.log(`[POST /api/assessments] Request received`);
   try {
     const body: LaunchAssessmentRequest = await request.json();
+    console.log(`[POST /api/assessments] Body:`, JSON.stringify(body, null, 2));
 
     // Normalize to array (backward compatible)
     const taskIds = body.task_ids || (body.task_id ? [body.task_id] : []);
@@ -159,6 +168,15 @@ export async function POST(request: NextRequest) {
     // Generate batch ID
     const batchId = body.batch_id || `batch_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
 
+    // Build agent config from request (support both flat params and nested agent_config)
+    const agentConfig = body.agent_config || {
+      agent_name: "white_agent",
+      model: (body as any).model || "gpt-4o",
+      max_steps: (body as any).max_steps || 15,
+      white_agent_url: (body as any).white_agent_url || WHITE_AGENT_URL,
+      vm_image: (body as any).vm_image || "osworld-gnome-v6",
+    };
+
     const assessmentIds: string[] = [];
     const failedTasks: { task_id: string; error: string }[] = [];
 
@@ -177,7 +195,7 @@ export async function POST(request: NextRequest) {
           completed_at: null,
           steps: 0,
           success: null,
-          config: body.agent_config,
+          config: agentConfig,
           run_number: i + 1,
           batch_id: batchId,
           domain: task.domain || null,
@@ -194,7 +212,7 @@ export async function POST(request: NextRequest) {
         await saveAssessment(assessment);
 
         // Launch to Green Agent
-        await launchTaskToGreenAgent(task, assessmentId, body.agent_config);
+        await launchTaskToGreenAgent(task, assessmentId, agentConfig);
 
         assessmentIds.push(assessmentId);
       } catch (error) {
@@ -234,14 +252,18 @@ export async function POST(request: NextRequest) {
       response.failed_tasks = failedTasks;
     }
 
+    console.log(`[POST /api/assessments] Final response:`, JSON.stringify(response, null, 2));
+
     // Return appropriate status code
     if (status === "failed") {
+      console.log(`[POST /api/assessments] Returning 500 - all tasks failed`);
       return NextResponse.json(
         { ...response, error: "All tasks failed to launch" },
         { status: 500 }
       );
     }
 
+    console.log(`[POST /api/assessments] Returning 200 - success`);
     return NextResponse.json(response);
   } catch (error) {
     console.error("Error launching assessment:", error);

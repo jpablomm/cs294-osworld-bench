@@ -179,6 +179,31 @@ export default function ComparePage() {
                 Loading configurations...
               </div>
             )}
+
+            {!configsLoading && configs.length === 0 && (
+              <div className="mt-4 p-4 bg-muted/50 rounded-lg">
+                <p className="text-sm text-muted-foreground text-center">
+                  <strong>No configurations available yet.</strong>
+                </p>
+                <p className="text-xs text-muted-foreground text-center mt-2">
+                  Configurations appear here after assessments complete. Go to{" "}
+                  <a href="/launch" className="text-primary underline">Launch</a>{" "}
+                  to run some assessments first.
+                </p>
+              </div>
+            )}
+
+            {!configsLoading && configs.length === 1 && (
+              <div className="mt-4 p-4 bg-muted/50 rounded-lg">
+                <p className="text-sm text-muted-foreground text-center">
+                  <strong>Only one configuration found.</strong>
+                </p>
+                <p className="text-xs text-muted-foreground text-center mt-2">
+                  To compare, run assessments with different models or settings.
+                  Each unique configuration will appear as a separate option.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

@@ -12,7 +12,7 @@ export async function GET(
 ) {
   try {
     const { batch_id } = await context.params;
-    const assessments = getBatchAssessments(batch_id);
+    const assessments = await getBatchAssessments(batch_id);
 
     if (assessments.length === 0) {
       return NextResponse.json(
@@ -21,22 +21,30 @@ export async function GET(
       );
     }
 
-    // Calculate summary statistics
-    const summary = {
-      total_runs: assessments.length,
-      completed: assessments.filter((a) => a.status === "completed").length,
-      running: assessments.filter((a) => a.status === "running").length,
-      failed: assessments.filter((a) => a.status === "failed").length,
-      success_rate:
-        assessments.filter((a) => a.success === true).length /
-        assessments.filter((a) => a.status === "completed").length *
-        100 || 0,
+    // Calculate aggregate statistics (matching BatchResponse type)
+    const completedAssessments = assessments.filter((a) => a.status === "completed");
+    const completedCount = completedAssessments.length;
+    const successCount = completedAssessments.filter((a) => a.success === true).length;
+
+    const aggregate_stats = {
+      success_rate: completedCount > 0 ? (successCount / completedCount) * 100 : 0,
+      avg_steps: completedCount > 0
+        ? completedAssessments.reduce((sum, a) => sum + (a.steps || 0), 0) / completedCount
+        : 0,
+      avg_time_sec: completedCount > 0
+        ? completedAssessments.reduce((sum, a) => sum + (a.time_sec || 0), 0) / completedCount
+        : 0,
+      avg_evaluation_score: completedCount > 0
+        ? completedAssessments.reduce((sum, a) => sum + (a.evaluation_score || 0), 0) / completedCount
+        : null,
     };
 
     return NextResponse.json({
       batch_id,
+      total_runs: assessments.length,
+      completed_runs: completedCount,
       assessments,
-      summary,
+      aggregate_stats,
     });
   } catch (error) {
     console.error("Error getting batch:", error);

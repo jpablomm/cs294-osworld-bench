@@ -38,6 +38,18 @@ export default function LaunchPage() {
   // Configuration state with validation
   const [maxSteps, setMaxSteps] = useState(15);
   const [numRuns, setNumRuns] = useState(1);
+  const [model, setModel] = useState("gpt-4o");
+
+  // Available models for selection
+  const availableModels = [
+    { value: "gpt-4o", label: "GPT-4o", description: "OpenAI GPT-4o (recommended)" },
+    { value: "gpt-4o-mini", label: "GPT-4o Mini", description: "OpenAI GPT-4o Mini (faster, cheaper)" },
+    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4", description: "Anthropic Claude Sonnet 4" },
+    { value: "claude-opus-4-20250514", label: "Claude Opus 4", description: "Anthropic Claude Opus 4 (most capable)" },
+    { value: "qwen-vl-max", label: "Qwen VL Max", description: "Alibaba Qwen Vision-Language" },
+    // Experimental models
+    { value: "langchain-gpt-4o", label: "⚗️ LangChain GPT-4o", description: "EXPERIMENTAL: GPT-4o + web search", experimental: true },
+  ];
 
   // Get selected tasks array from IDs
   const selectedTasks = useMemo(() => {
@@ -125,25 +137,40 @@ export default function LaunchPage() {
   const handleLaunch = useCallback(async () => {
     if (selectedTasks.length === 0 || launchMutation.isPending) return;
 
+    console.log("[Launch] Starting launch...", {
+      task_ids: selectedTasks.map((t) => t.id),
+      maxSteps,
+      numRuns,
+      model,
+    });
+
     try {
+      console.log("[Launch] Calling launchMutation.mutateAsync...");
       const result = await launchMutation.mutateAsync({
         task_ids: selectedTasks.map((t) => t.id),
         domain: selectedTasks[0]?.domain,
         max_steps: maxSteps,
         vm_image: "osworld-gnome-v6",
         num_runs: numRuns,
+        model: model,
       });
+
+      console.log("[Launch] Got result:", result);
 
       // Always redirect to batch view for multi-task or if batch_id is present
       if (result.batch_id) {
+        console.log("[Launch] Redirecting to batch:", result.batch_id);
         router.push(`/batch/${result.batch_id}`);
       } else if (result.assessment_id) {
+        console.log("[Launch] Redirecting to assessment:", result.assessment_id);
         router.push(`/assessment/${result.assessment_id}/live`);
+      } else {
+        console.log("[Launch] No batch_id or assessment_id in result!");
       }
     } catch (error) {
-      console.error("Launch failed:", error);
+      console.error("[Launch] Failed:", error);
     }
-  }, [selectedTasks, launchMutation, maxSteps, numRuns, router]);
+  }, [selectedTasks, launchMutation, maxSteps, numRuns, model, router]);
 
   // Keyboard shortcut: Enter to launch
   useEffect(() => {
@@ -355,6 +382,30 @@ export default function LaunchPage() {
                   <p className="text-xs text-muted-foreground">
                     Run each task multiple times (1-10)
                   </p>
+                </div>
+
+                {/* Model Selection */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Model</label>
+                  <select
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {availableModels.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    {availableModels.find((m) => m.value === model)?.description}
+                  </p>
+                  {availableModels.find((m) => m.value === model)?.experimental && (
+                    <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                      ⚠️ Experimental: Not recommended for production use
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>

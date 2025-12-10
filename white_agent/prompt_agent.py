@@ -56,6 +56,26 @@ try:
 except ImportError:
     Groq = None
 
+# LangChain with DeepAgents support
+try:
+    from langchain.chat_models import init_chat_model
+    from langchain_core.messages import HumanMessage, SystemMessage
+    langchain_available = True
+except ImportError:
+    langchain_available = False
+
+try:
+    from deepagents import create_deep_agent
+    deepagents_available = True
+except ImportError:
+    deepagents_available = False
+
+try:
+    from tavily import TavilyClient
+    tavily_available = True
+except ImportError:
+    tavily_available = False
+
 # Local imports - now using white_agent package paths
 from white_agent.accessibility_tree_wrap.heuristic_retrieve import filter_nodes, draw_bounding_boxes
 from white_agent.prompts import (
@@ -1184,7 +1204,119 @@ class PromptAgent:
             except Exception as e:
                 print("Failed to call LLM: " + str(e))
                 return ""
-        
+
+        elif self.model.startswith("langchain"):
+            # EXPERIMENTAL: LangChain with DeepAgents integration
+            # Model format: langchain-<model> e.g. langchain-gpt-4o
+            # WARNING: This is experimental and not recommended for production.
+            # Web search adds latency with limited benefit for GUI-based tasks.
+            logger.warning(
+                "EXPERIMENTAL: Using LangChain agent (%s). This is experimental and "
+                "not recommended for production. Consider using the model directly "
+                "(e.g., 'gpt-4o' instead of 'langchain-gpt-4o').",
+                self.model
+            )
+            if not langchain_available:
+                raise ImportError("LangChain not available. Install with: pip install langchain langchain-openai langchain-core")
+            if not deepagents_available:
+                raise ImportError("DeepAgents not available. Install with: pip install deepagents")
+
+            messages = payload["messages"]
+            max_tokens = payload["max_tokens"]
+            temperature = payload["temperature"]
+
+            # Parse the model string to extract provider and model name
+            # Format: langchain-<model> where model can be like "gpt-4o" or "claude-3-sonnet"
+            model_parts = self.model.split("-", 1)
+            if len(model_parts) > 1:
+                underlying_model = model_parts[1]  # e.g., "gpt-4o" from "langchain-gpt-4o"
+            else:
+                underlying_model = "gpt-4o"  # default
+
+            # Determine API key based on underlying model
+            if underlying_model.startswith("gpt") or underlying_model.startswith("o1") or underlying_model.startswith("o3"):
+                api_key = os.environ.get("OPENAI_API_KEY")
+            elif underlying_model.startswith("claude"):
+                api_key = os.environ.get("ANTHROPIC_API_KEY")
+            else:
+                api_key = os.environ.get("OPENAI_API_KEY")  # default to OpenAI
+
+            # Initialize LangChain chat model
+            llm = init_chat_model(
+                model=underlying_model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+            # Optionally wrap with DeepAgents for web search capability
+            if tavily_available and os.environ.get("TAVILY_API_KEY"):
+                tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+
+                def tavily_search(query: str, max_results: int = 5, include_raw_content: bool = False):
+                    """Run a web search"""
+                    return tavily_client.search(
+                        query,
+                        max_results=max_results,
+                        include_raw_content=include_raw_content,
+                        topic="general",
+                    )
+
+                llm = create_deep_agent(model=llm, system_prompt="", tools=[tavily_search])
+
+            # Convert messages to LangChain format
+            langchain_messages = []
+            for message in messages:
+                role = message["role"]
+                content_parts = message["content"]
+
+                # Build content for LangChain message
+                if len(content_parts) == 1 and content_parts[0]["type"] == "text":
+                    # Simple text message
+                    content = content_parts[0]["text"]
+                else:
+                    # Multimodal message with potential images
+                    content = []
+                    for part in content_parts:
+                        if part["type"] == "text":
+                            content.append({"type": "text", "text": part["text"]})
+                        elif part["type"] == "image_url":
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": part["image_url"]["url"]}
+                            })
+
+                if role == "system":
+                    langchain_messages.append(SystemMessage(content=content))
+                elif role == "user":
+                    langchain_messages.append(HumanMessage(content=content))
+                elif role == "assistant":
+                    from langchain_core.messages import AIMessage
+                    langchain_messages.append(AIMessage(content=content))
+
+            logger.info("Generating content with LangChain model: %s (underlying: %s)", self.model, underlying_model)
+
+            try:
+                # Call the LLM - handle both raw model and DeepAgent wrapped model
+                if hasattr(llm, 'invoke') and callable(llm.invoke):
+                    if deepagents_available and tavily_available and os.environ.get("TAVILY_API_KEY"):
+                        # DeepAgent expects dict with messages key
+                        response = llm.invoke({"messages": langchain_messages})
+                    else:
+                        # Raw LangChain model
+                        response = llm.invoke(langchain_messages)
+
+                    if hasattr(response, 'content'):
+                        return response.content
+                    else:
+                        return str(response)
+                else:
+                    raise ValueError("LLM does not have invoke method")
+
+            except Exception as e:
+                logger.error("Failed to call LangChain LLM: %s", str(e))
+                return ""
+
         else:
             raise ValueError("Invalid model: " + self.model)
 

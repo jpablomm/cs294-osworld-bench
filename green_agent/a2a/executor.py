@@ -9,16 +9,31 @@ import json
 import logging
 import asyncio
 import time
+import httpx
 from datetime import datetime
 from typing import Dict, Any, Optional
 from pathlib import Path
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
-from a2a.types import TaskState
+from a2a.types import TaskState, TaskStatus, TaskStatusUpdateEvent
 from a2a.utils import new_agent_text_message
 
 logger = logging.getLogger(__name__)
+
+
+async def _push_event_to_webui(callback_url: Optional[str], event: Dict[str, Any]) -> None:
+    """Push event to WebUI callback endpoint for real-time updates."""
+    if not callback_url:
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(callback_url, json=event)
+            if response.status_code != 200:
+                logger.warning(f"WebUI callback failed: {response.status_code}")
+    except Exception as e:
+        logger.warning(f"Failed to push event to WebUI: {e}")
 
 
 def make_json_serializable(obj: Any) -> Any:
@@ -113,25 +128,26 @@ class GreenAgentExecutor(AgentExecutor):
         logger.info(f"[A2A] Received task: {task_id}")
 
         try:
+            # IMPORTANT: Emit a TaskStatusUpdateEvent immediately to enable non-blocking behavior
+            # The A2A SDK only returns early (when blocking=false) after receiving a Task event
+            await event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task_id,
+                    context_id=context_id,
+                    status=TaskStatus(
+                        state=TaskState.working,
+                        message="Assessment accepted and starting execution"
+                    )
+                )
+            )
+            logger.info(f"[A2A] Emitted TaskStatusUpdateEvent(working) for {task_id}")
+
             # Parse configuration from message and metadata
             user_input = context.get_user_input()
             metadata = context.metadata
 
             config = self._parse_task_config(user_input, metadata)
             logger.info(f"[A2A] Parsed config for {task_id}: {list(config.keys())}")
-
-            # Send acknowledgment
-            await event_queue.enqueue_event(
-                new_agent_text_message(
-                    json.dumps({
-                        "status": "accepted",
-                        "assessment_id": task_id,
-                        "message": "Assessment accepted and starting execution"
-                    }),
-                    context_id=context_id,
-                    task_id=task_id
-                )
-            )
 
             # Execute the assessment
             result = await self._execute_assessment(
@@ -254,9 +270,10 @@ class GreenAgentExecutor(AgentExecutor):
         else:
             raise ValueError("osworld_task_id must be provided in metadata")
 
-        # Extract optional parameters
-        config["max_steps"] = metadata.get("max_steps", 15)
-        config["vm_image"] = metadata.get("vm_image", "osworld-golden-v12-gnome")
+        # Extract optional parameters (check both top-level and nested agent_config)
+        agent_config = metadata.get("agent_config", {})
+        config["max_steps"] = metadata.get("max_steps") or agent_config.get("max_steps", 15)
+        config["vm_image"] = metadata.get("vm_image") or agent_config.get("vm_image", "osworld-golden-v12-gnome")
         config["metrics"] = metadata.get("metrics", ["success", "steps", "time_sec"])
         config["domain"] = metadata.get("domain")
 
@@ -476,12 +493,33 @@ class GreenAgentExecutor(AgentExecutor):
             result["assessment_id"] = assessment_id
             result["total_time_sec"] = time.time() - start_time
 
+            # Push assessment summary to WebUI
+            await _push_event_to_webui(callback_url, {
+                "type": "assessment_summary",
+                "timestamp": datetime.utcnow().isoformat(),
+                "success": result.get("success") == 1,
+                "steps": result.get("steps", 0),
+                "time_sec": result["total_time_sec"],
+                "vm_cost": result["vm_cost"],
+                "evaluation_score": result.get("evaluation_score"),
+                "evaluation_method": result.get("evaluation_method"),
+                "message": f"Assessment {'completed successfully' if result.get('success') == 1 else 'failed'}"
+            })
+
             # Cleanup VM
             logger.info("Cleaning up VM...")
             await asyncio.to_thread(
                 self._get_vm_manager().delete_vm,
                 assessment_id
             )
+
+            # Push assessment completed to WebUI
+            await _push_event_to_webui(callback_url, {
+                "type": "assessment_completed",
+                "timestamp": datetime.utcnow().isoformat(),
+                "success": result.get("success") == 1,
+                "message": "Assessment workflow completed"
+            })
 
             self.active_assessments[assessment_id]["status"] = "completed"
             return result
@@ -498,6 +536,15 @@ class GreenAgentExecutor(AgentExecutor):
                     )
                 except Exception as cleanup_error:
                     logger.error(f"VM cleanup failed: {cleanup_error}")
+
+            # Push error event to WebUI
+            await _push_event_to_webui(callback_url, {
+                "type": "assessment_completed",
+                "timestamp": datetime.utcnow().isoformat(),
+                "success": False,
+                "error": str(e),
+                "message": f"Assessment failed: {str(e)}"
+            })
 
             self.active_assessments[assessment_id]["status"] = "failed"
             self.active_assessments[assessment_id]["error"] = str(e)

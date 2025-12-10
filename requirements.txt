@@ -31,3 +31,14 @@ python-pptx
 pypdf
 rapidfuzz
 
+# EXPERIMENTAL: LangChain with DeepAgents integration
+# These are optional dependencies for experimental langchain-* models.
+# Not recommended for production - web search adds latency with limited
+# benefit for GUI-based OSWorld tasks. Install only if experimenting:
+#   pip install langchain langchain-openai langchain-core deepagents tavily-python
+# langchain>=0.3.0
+# langchain-openai>=0.2.0
+# langchain-core>=0.3.0
+# deepagents>=0.1.0
+# tavily-python>=0.5.0
+
