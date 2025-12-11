@@ -53,6 +53,7 @@ export function AssessmentTable({ assessments, isLoading }: AssessmentTableProps
             <TableHead className="text-center">Steps</TableHead>
             <TableHead className="text-center">Success</TableHead>
             <TableHead className="text-center">Score</TableHead>
+            <TableHead className="text-center">Eval Method</TableHead>
             <TableHead className="text-right">Time</TableHead>
             <TableHead className="text-right">Started</TableHead>
             <TableHead className="text-right">Actions</TableHead>
@@ -77,18 +78,25 @@ export function AssessmentTable({ assessments, isLoading }: AssessmentTableProps
                     ) : (
                       <Clock className="h-4 w-4 text-warning animate-pulse" />
                     )}
-                    <Badge
-                      variant={
-                        assessment.status === "completed"
-                          ? "default"
-                          : assessment.status === "failed"
-                          ? "destructive"
-                          : "secondary"
-                      }
-                      className="text-xs"
-                    >
-                      {assessment.status}
-                    </Badge>
+                    <div className="flex flex-col gap-0.5">
+                      <Badge
+                        variant={
+                          assessment.status === "completed"
+                            ? "default"
+                            : assessment.status === "failed"
+                            ? "destructive"
+                            : "secondary"
+                        }
+                        className="text-xs"
+                      >
+                        {assessment.status}
+                      </Badge>
+                      {assessment.status === "failed" && assessment.error_type && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {assessment.error_type.replace(/_/g, " ")}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </TableCell>
 
@@ -121,16 +129,11 @@ export function AssessmentTable({ assessments, isLoading }: AssessmentTableProps
                 {/* Success */}
                 <TableCell className="text-center">
                   {assessment.status === "completed" ? (
-                    <div className="flex items-center justify-center gap-1">
-                      {assessment.success ? (
-                        <CheckCircle2 className="h-4 w-4 text-success" />
-                      ) : (
-                        <XCircle className="h-4 w-4 text-destructive" />
-                      )}
-                      {isLLMOverride && (
-                        <Bot className="h-3 w-3 text-purple-400" title="LLM Judge Override" />
-                      )}
-                    </div>
+                    assessment.success ? (
+                      <CheckCircle2 className="h-4 w-4 text-success" />
+                    ) : (
+                      <XCircle className="h-4 w-4 text-destructive" />
+                    )
                   ) : (
                     <span className="text-muted-foreground text-xs">—</span>
                   )}
@@ -143,6 +146,28 @@ export function AssessmentTable({ assessments, isLoading }: AssessmentTableProps
                     <span className="font-mono text-sm">
                       {assessment.evaluation_score.toFixed(2)}
                     </span>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">—</span>
+                  )}
+                </TableCell>
+
+                {/* Evaluation Method */}
+                <TableCell className="text-center">
+                  {evaluationMethod ? (
+                    <Badge
+                      variant={isLLMOverride ? "default" : "outline"}
+                      className={`text-xs ${isLLMOverride ? "bg-purple-500/20 text-purple-400 border-purple-500/30" : ""}`}
+                    >
+                      {isLLMOverride && <Bot className="h-3 w-3 mr-1" />}
+                      {evaluationMethod === "rule_based" && "Rule"}
+                      {evaluationMethod === "osworld_benchmark" && "Rule"}
+                      {evaluationMethod === "llm_judge_override" && "LLM"}
+                      {evaluationMethod === "rule_based_confirmed_by_llm" && "Rule+LLM"}
+                      {evaluationMethod === "rule_based_llm_uncertain" && "Rule (LLM?)"}
+                      {evaluationMethod === "rule_based_llm_failed" && "Rule (LLM err)"}
+                      {evaluationMethod === "no_evaluator" && "None"}
+                      {!["rule_based", "osworld_benchmark", "llm_judge_override", "rule_based_confirmed_by_llm", "rule_based_llm_uncertain", "rule_based_llm_failed", "no_evaluator"].includes(evaluationMethod) && evaluationMethod}
+                    </Badge>
                   ) : (
                     <span className="text-muted-foreground text-xs">—</span>
                   )}

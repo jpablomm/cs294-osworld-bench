@@ -103,11 +103,16 @@ export default function AssessmentDetailPage() {
         </Link>
 
         <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-bold tracking-tight truncate">
               {assessment.task_id}
             </h1>
-            <p className="text-sm text-muted-foreground truncate">
+            {task?.instruction && (
+              <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                {task.instruction}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground/70 mt-1 font-mono">
               {assessmentId}
             </p>
           </div>

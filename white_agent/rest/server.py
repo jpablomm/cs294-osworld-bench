@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """
-White Agent - REST API Server
+White Agent - REST API Server (Stateless for Cloud Run)
 
 FastAPI-based REST server for custom orchestrator integration.
 Uses PromptAgent for multi-model support (GPT-4V, Claude, Gemini, Qwen, etc.)
+
+STATELESS DESIGN:
+- No global agent state - fresh PromptAgent created per request
+- Trajectory passed in request, rebuilt on each call
+- Supports Cloud Run auto-scaling and concurrent requests
+- Green agent owns trajectory state
 """
 
 import logging
 import uuid
-from typing import Dict, Any
+import base64
+from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -37,70 +44,76 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# NOTE: Loop detection is handled by the Green Agent (orchestrator), not here.
-# The Green Agent tracks actions and injects stuck_feedback into observations.
-# See: green_agent/a2a/server.py for A2A flow.
+# NOTE: This server is STATELESS for Cloud Run compatibility.
+# - No global agent instance
+# - No conversation contexts stored server-side
+# - Trajectory is passed in each request by the green agent
+# - Each request creates a fresh PromptAgent
 
 # FastAPI app
 app = FastAPI(
-    title=f"White Agent (REST) - {MODEL}",
-    description=f"White agent server using PromptAgent with {MODEL}"
+    title=f"White Agent (REST, Stateless) - {MODEL}",
+    description=f"Stateless white agent server using PromptAgent with {MODEL}. "
+                f"Designed for Cloud Run auto-scaling."
 )
 
-# Global agent instance - lazy initialization
-_agent: PromptAgent | None = None
 
-
-def get_agent() -> PromptAgent:
-    """Get or create the PromptAgent instance."""
-    global _agent
-    if _agent is None:
-        logger.info(f"Initializing PromptAgent: model={MODEL}, obs_type={OBSERVATION_TYPE}")
-        _agent = PromptAgent(
-            model=MODEL,
-            temperature=TEMPERATURE,
-            observation_type=OBSERVATION_TYPE,
-            action_space=ACTION_SPACE,
-            max_trajectory_length=MAX_TRAJECTORY_LENGTH,
-            max_tokens=MAX_TOKENS,
-            top_p=TOP_P,
-        )
-        logger.info("PromptAgent initialized successfully")
-    return _agent
-
-
-# Conversation contexts (task_id -> context)
-conversation_contexts: Dict[str, Dict[str, Any]] = {}
-
-
+# =============================================================================
 # Request/Response Models
+# =============================================================================
+
+class TrajectoryStep(BaseModel):
+    """Single step in trajectory history (text only, no screenshots)."""
+    accessibility_tree: Optional[str] = None  # Trimmed a11y tree summary
+    action: Any  # The parsed action {op: str, args: dict}
+    thought: str  # LLM response text
+
+
+class Observation(BaseModel):
+    """
+    Direct observation request - includes trajectory for stateless operation.
+
+    The green agent passes the accumulated trajectory with each request.
+    This allows any white agent instance to handle any request.
+    """
+    frame_id: int
+    image_png_b64: str
+    instruction: str = ""
+    accessibility_tree: Optional[str] = None
+    done: bool = False
+    stuck_feedback: Optional[str] = None  # Feedback when agent is stuck in a loop
+    # Trajectory passed by green agent (no screenshots - text only)
+    trajectory: List[TrajectoryStep] = []
+    # Model override (optional) - if provided, use this model instead of default
+    model: Optional[str] = None
+
+
+class DecideResponse(BaseModel):
+    """Response model - returns data for green agent to store."""
+    action: Dict[str, Any]  # Parsed action {op: str, args: dict}
+    thought: str  # Raw LLM response
+    # Processed observation data for green agent to store in trajectory
+    trajectory_step: TrajectoryStep
+
+
 class A2ATask(BaseModel):
     """Task request model (A2A-compatible format)"""
     task_id: str
-    context_id: str | None = None
+    context_id: Optional[str] = None
     message: str
-    metadata: Dict[str, Any] | None = None
+    metadata: Optional[Dict[str, Any]] = None
+    # Trajectory for stateless operation
+    trajectory: List[TrajectoryStep] = []
 
 
 class A2AMessage(BaseModel):
     """Response message model (A2A-compatible format)"""
     message_id: str
     task_id: str
-    context_id: str | None = None
+    context_id: Optional[str] = None
     role: str
     content: str
-    metadata: Dict[str, Any] | None = None
-
-
-class Observation(BaseModel):
-    """Direct observation request (simpler format)"""
-    frame_id: int
-    image_png_b64: str
-    instruction: str = ""
-    accessibility_tree: str | None = None
-    done: bool = False
-    reset_before: bool = False  # If True, reset agent trajectory before processing
-    stuck_feedback: str | None = None  # Feedback when agent is stuck in a loop
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class AgentCardResponse(BaseModel):
@@ -112,28 +125,70 @@ class AgentCardResponse(BaseModel):
     model: str
 
 
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def create_agent(model_override: Optional[str] = None) -> PromptAgent:
+    """Create a fresh PromptAgent instance for this request."""
+    use_model = model_override or MODEL
+    return PromptAgent(
+        model=use_model,
+        temperature=TEMPERATURE,
+        observation_type=OBSERVATION_TYPE,
+        action_space=ACTION_SPACE,
+        max_trajectory_length=MAX_TRAJECTORY_LENGTH,
+        max_tokens=MAX_TOKENS,
+        top_p=TOP_P,
+    )
+
+
+def rebuild_trajectory(agent: PromptAgent, trajectory: List[TrajectoryStep]) -> None:
+    """
+    Rebuild agent trajectory from request data.
+
+    Only uses the last MAX_TRAJECTORY_LENGTH steps.
+    Screenshots are NOT included in trajectory - only current observation has screenshot.
+    """
+    steps_to_use = trajectory[-MAX_TRAJECTORY_LENGTH:] if trajectory else []
+
+    for step in steps_to_use:
+        # Past observations don't need screenshots - only current does
+        agent.observations.append({
+            "screenshot": None,
+            "accessibility_tree": step.accessibility_tree,
+        })
+        agent.actions.append(step.action)
+        agent.thoughts.append(step.thought)
+
+
 def build_agent_url() -> str:
     """Build the agent URL from environment."""
     return get_agent_url()
 
 
+# =============================================================================
+# Endpoints
+# =============================================================================
+
 @app.on_event("startup")
 async def startup_event():
-    """Startup - agent initializes lazily on first request"""
-    logger.info(f"White Agent (REST) starting - model={MODEL}")
-    logger.info("Agent will initialize on first request")
+    """Startup - stateless server, no initialization needed"""
+    logger.info(f"White Agent (REST, Stateless) starting - model={MODEL}")
+    logger.info("Stateless mode: fresh agent created per request")
+    logger.info("Cloud Run optimized: supports auto-scaling and concurrent requests")
 
 
 @app.get("/health")
 def health():
-    """Health check endpoint"""
+    """Health check - stateless service."""
     return {
-        "status": "healthy" if _agent is not None else "initializing",
+        "status": "healthy",
         "protocol": "rest",
         "model": MODEL,
         "observation_type": OBSERVATION_TYPE,
-        "agent_ready": _agent is not None,
-        "active_contexts": len(conversation_contexts)
+        "stateless": True,
+        "cloud_run_optimized": True,
     }
 
 
@@ -141,9 +196,10 @@ def health():
 def status():
     """Status endpoint"""
     return {
-        "status": "running" if _agent is not None else "initializing",
+        "status": "running",
         "model": MODEL,
-        "protocol": "rest"
+        "protocol": "rest",
+        "stateless": True,
     }
 
 
@@ -153,17 +209,94 @@ def get_agent_card() -> AgentCardResponse:
     """Agent card for discovery"""
     return AgentCardResponse(
         name=f"OSWorld Agent ({MODEL})",
-        description=f"White agent for desktop automation using {MODEL}",
+        description=f"Stateless white agent for desktop automation using {MODEL}",
         url=build_agent_url(),
-        version="2.0.0",
+        version="3.0.0",  # Version bump for stateless architecture
         model=MODEL
     )
+
+
+@app.post("/decide", response_model=DecideResponse)
+def decide(obs: Observation) -> DecideResponse:
+    """
+    Stateless action decision endpoint.
+
+    - Creates fresh PromptAgent per request
+    - Rebuilds trajectory from request payload
+    - Returns action + data for caller to store
+
+    This design supports Cloud Run auto-scaling and concurrent requests.
+    Any instance can handle any request since there's no server-side state.
+    """
+    try:
+        # Create fresh agent for this request (no shared state)
+        # Use model from request if provided, otherwise use default
+        agent = create_agent(model_override=obs.model)
+
+        # Rebuild trajectory from request
+        rebuild_trajectory(agent, obs.trajectory)
+
+        logger.info(f"Frame {obs.frame_id}: Processing with {len(obs.trajectory)} history steps, model={agent.model}")
+
+        # Build current observation (this one HAS the screenshot)
+        # NOTE: PromptAgent.predict() expects screenshot as raw bytes, not base64 string
+        # It will encode to base64 internally via encode_image()
+        screenshot_bytes = base64.b64decode(obs.image_png_b64)
+        obs_for_agent = {"screenshot": screenshot_bytes}
+        if obs.accessibility_tree:
+            obs_for_agent["accessibility_tree"] = obs.accessibility_tree
+
+        # Inject stuck feedback if present
+        instruction = obs.instruction
+        if obs.stuck_feedback:
+            logger.warning(f"[LoopDetection] Stuck feedback for frame {obs.frame_id}")
+            instruction = f"{obs.stuck_feedback}\n\nOriginal task: {obs.instruction}"
+
+        # Get prediction from LLM
+        response, actions = agent.predict(instruction, obs_for_agent)
+
+        # Parse action using robust parser
+        parsed_action = parse_actions(response)
+
+        # Build trajectory step for green agent to store
+        # Trim accessibility tree to reduce payload size
+        trimmed_a11y = None
+        if obs.accessibility_tree:
+            trimmed_a11y = obs.accessibility_tree[:2000] if len(obs.accessibility_tree) > 2000 else obs.accessibility_tree
+
+        trajectory_step = TrajectoryStep(
+            accessibility_tree=trimmed_a11y,
+            action=parsed_action,
+            thought=response,
+        )
+
+        logger.info(f"Frame {obs.frame_id}: Action={parsed_action.get('op', 'unknown')}")
+
+        return DecideResponse(
+            action=parsed_action,
+            thought=response,
+            trajectory_step=trajectory_step,
+        )
+
+    except Exception as e:
+        logger.error(f"Decide failed: {e}", exc_info=True)
+        error_action = {"op": "error", "args": {"message": str(e)}}
+        error_step = TrajectoryStep(
+            accessibility_tree=None,
+            action=error_action,
+            thought=f"Error: {e}",
+        )
+        return DecideResponse(
+            action=error_action,
+            thought=f"Error: {e}",
+            trajectory_step=error_step,
+        )
 
 
 @app.post("/task")
 def handle_task(task: A2ATask) -> A2AMessage:
     """
-    Handle task request (A2A-compatible format).
+    Handle task request (A2A-compatible format, stateless).
 
     Expected task.metadata:
     {
@@ -174,37 +307,19 @@ def handle_task(task: A2ATask) -> A2AMessage:
             "done": bool
         }
     }
-    """
-    try:
-        agent = get_agent()
-    except Exception as e:
-        return A2AMessage(
-            message_id=str(uuid.uuid4()),
-            task_id=task.task_id,
-            context_id=task.context_id or task.task_id,
-            role="agent",
-            content=f"Agent initialization failed: {e}",
-            metadata={"status": "error", "error": "agent_init_failed"}
-        )
 
+    Trajectory is passed in task.trajectory for stateless operation.
+    """
     context_id = task.context_id or task.task_id
 
-    # Initialize conversation context if needed
-    if context_id not in conversation_contexts:
-        # Reset agent for new context to prevent cross-task contamination
-        agent.reset()
-        conversation_contexts[context_id] = {
-            "task_id": task.task_id,
-            "step": 0,
-            "history": [],
-            "instruction": None
-        }
-
-    context = conversation_contexts[context_id]
-    step = context["step"]
-
     try:
-        # Parse observation
+        # Create fresh agent for this request
+        agent = create_agent()
+
+        # Rebuild trajectory from request
+        rebuild_trajectory(agent, task.trajectory)
+
+        # Parse observation from metadata
         if not task.metadata or "observation" not in task.metadata:
             raise ValueError("Task must have observation in metadata")
 
@@ -213,9 +328,7 @@ def handle_task(task: A2ATask) -> A2AMessage:
         screenshot_bytes = observation["screenshot"]
         accessibility_tree = observation.get("accessibility_tree")
 
-        if context["instruction"] is None:
-            context["instruction"] = instruction
-
+        step = len(task.trajectory)
         logger.info(f"Step {step}: Processing observation for '{instruction[:80]}...'")
 
         # Build observation for agent
@@ -226,18 +339,22 @@ def handle_task(task: A2ATask) -> A2AMessage:
         # Get prediction
         response, actions = agent.predict(instruction, obs_for_agent)
 
-        # Parse actions using core.py's robust parser directly on raw response
-        # It handles JSON, pyautogui code, DONE/FAIL, and code blocks
-        action = parse_actions(response)
+        # Parse actions using robust parser
+        parsed_action = parse_actions(response)
 
-        # Update context
-        context["step"] += 1
-        context["history"].append({"step": step, "response": response, "action": action})
+        # Build trajectory step for response
+        trimmed_a11y = None
+        if accessibility_tree:
+            trimmed_a11y = accessibility_tree[:2000] if len(accessibility_tree) > 2000 else accessibility_tree
+
+        trajectory_step = TrajectoryStep(
+            accessibility_tree=trimmed_a11y,
+            action=parsed_action,
+            thought=response,
+        )
 
         # Check if done
-        task_done = action.get("op") == "done" or observation.get("done", False)
-        if task_done:
-            del conversation_contexts[context_id]
+        task_done = parsed_action.get("op") == "done" or observation.get("done", False)
 
         return A2AMessage(
             message_id=str(uuid.uuid4()),
@@ -246,10 +363,11 @@ def handle_task(task: A2ATask) -> A2AMessage:
             role="agent",
             content=f"Step {step}: {response}",
             metadata={
-                "action": action,
+                "action": parsed_action,
                 "step": step,
                 "done": task_done,
-                "raw_response": response
+                "raw_response": response,
+                "trajectory_step": trajectory_step.dict(),
             }
         )
 
@@ -265,130 +383,32 @@ def handle_task(task: A2ATask) -> A2AMessage:
         )
 
 
-@app.post("/decide")
-def decide(obs: Observation) -> Dict[str, Any]:
-    """
-    Direct action decision endpoint (simpler format).
-
-    Returns OSWorld action format:
-    {"op": "click", "args": {"x": 100, "y": 200}}
-
-    Set reset_before=True in the request to clear agent trajectory before processing.
-    This should be used for the first observation of a new task to prevent
-    cross-task contamination from previous assessments.
-    """
-    try:
-        agent = get_agent()
-    except Exception as e:
-        return {"op": "error", "args": {"message": str(e)}}
-
-    try:
-        # Reset agent trajectory if requested (should be True for first step of new task)
-        if obs.reset_before:
-            agent.reset()
-            logger.info(f"Agent trajectory reset before processing frame {obs.frame_id}")
-
-        # Parse observation properly
-        observation = parse_observation({
-            "image_png_b64": obs.image_png_b64,
-            "instruction": obs.instruction,
-            "frame_id": obs.frame_id,
-            "done": obs.done
-        })
-
-        obs_for_agent = {"screenshot": observation["screenshot"]}
-        if obs.accessibility_tree:
-            obs_for_agent["accessibility_tree"] = obs.accessibility_tree
-
-        # Inject stuck feedback into instruction if present
-        instruction = obs.instruction
-        if obs.stuck_feedback:
-            logger.warning(f"[LoopDetection] === STUCK FEEDBACK RECEIVED === Frame {obs.frame_id}")
-            logger.info(f"[LoopDetection] Modifying instruction to include recovery guidance")
-            logger.debug(f"[LoopDetection] Stuck feedback preview: {obs.stuck_feedback[:200]}...")
-            instruction = f"{obs.stuck_feedback}\n\nOriginal task: {obs.instruction}"
-
-        response, actions = agent.predict(instruction, obs_for_agent)
-
-        # Parse actions using core.py's robust parser directly on raw response
-        # It handles JSON, pyautogui code, DONE/FAIL, and code blocks
-        return parse_actions(response)
-
-    except Exception as e:
-        logger.error(f"Decide failed: {e}", exc_info=True)
-        return {"op": "error", "args": {"message": str(e)}}
-
-
 @app.post("/reset")
 def reset():
-    """Reset agent state"""
-    global conversation_contexts, _agent
-    if _agent is not None:
-        _agent.reset()
-    conversation_contexts = {}
-    logger.info("Agent reset")
-    return {"status": "reset", "model": MODEL}
+    """Reset - no-op for stateless service."""
+    logger.info("Reset called (no-op for stateless service)")
+    return {"status": "ok", "message": "Stateless service - nothing to reset", "model": MODEL}
 
 
 @app.get("/debug/contexts")
 def debug_contexts():
-    """Debug endpoint to view conversation contexts"""
+    """Debug endpoint - stateless service has no contexts."""
     return {
-        "active_contexts": len(conversation_contexts),
+        "status": "stateless",
+        "message": "Stateless service - contexts managed by green agent",
         "model": MODEL,
-        "contexts": {
-            ctx_id: {
-                "task_id": ctx["task_id"],
-                "step": ctx["step"],
-                "instruction": ctx["instruction"][:100] if ctx["instruction"] else None,
-            }
-            for ctx_id, ctx in conversation_contexts.items()
-        }
     }
 
 
 @app.get("/debug/trajectory")
 def debug_trajectory():
-    """
-    Debug endpoint to inspect agent trajectory history.
-
-    This shows the internal state of the PromptAgent that determines
-    what context is sent to the LLM on each prediction.
-    """
-    if _agent is None:
-        return {
-            "status": "agent_not_initialized",
-            "message": "Agent has not been initialized yet. Make a prediction first."
-        }
-
-    observations = _agent.observations
-    actions = _agent.actions
-    thoughts = _agent.thoughts
-    max_traj = _agent.max_trajectory_length
-
-    # Truncate for readability
-    def truncate(s, max_len=200):
-        if isinstance(s, str):
-            return s[:max_len] + "..." if len(s) > max_len else s
-        elif isinstance(s, list):
-            return [truncate(item, max_len) for item in s[-5:]]
-        return str(s)[:max_len]
-
+    """Debug endpoint - trajectory is managed by green agent."""
     return {
-        "status": "ok",
+        "status": "stateless",
+        "message": "Trajectory managed by green agent, not white agent. "
+                   "Pass trajectory in request to /decide endpoint.",
         "model": MODEL,
-        "trajectory_length": len(actions),
-        "max_trajectory_length": max_traj,
-        "context_sent_to_llm": min(len(actions), max_traj),
-        "observations_count": len(observations),
-        "actions_count": len(actions),
-        "thoughts_count": len(thoughts),
-        "recent_actions": truncate(actions),
-        "recent_thoughts": truncate(thoughts),
-        "observation_has_screenshot": [
-            bool(obs.get("screenshot")) if isinstance(obs, dict) else False
-            for obs in observations[-5:]
-        ] if observations else [],
+        "max_trajectory_length": MAX_TRAJECTORY_LENGTH,
     }
 
 

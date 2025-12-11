@@ -74,6 +74,16 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
     """
     actions_str = actions_str.strip()
 
+    # Strip markdown code blocks (```json ... ``` or ```python ... ```)
+    if actions_str.startswith('```'):
+        # Remove opening fence (```json, ```python, or just ```)
+        lines = actions_str.split('\n')
+        if lines[0].startswith('```'):
+            lines = lines[1:]  # Remove first line with ```
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]  # Remove last line with ```
+        actions_str = '\n'.join(lines).strip()
+
     # Check for JSON format (GPT-4o sometimes returns this)
     if actions_str.startswith('{') and actions_str.endswith('}'):
         try:

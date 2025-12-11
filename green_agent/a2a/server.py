@@ -465,6 +465,12 @@ def _parse_task_config(task: A2ATask) -> Dict[str, Any]:
     config["metrics"] = task.metadata.get("metrics", ["success", "steps", "time_sec"])
     config["domain"] = task.metadata.get("domain")  # OSWorld task domain (os, chrome, vlc, etc.)
 
+    # Extract model from agent_config (passed from webui)
+    agent_config = task.metadata.get("agent_config", {})
+    if isinstance(agent_config, dict) and "model" in agent_config:
+        config["model"] = agent_config["model"]
+        logger.info(f"Model from agent_config: {config['model']}")
+
     # Extract full OSWorld task if provided (from Supabase)
     if "osworld_task" in task.metadata:
         config["osworld_task"] = task.metadata["osworld_task"]
@@ -740,7 +746,8 @@ async def _execute_assessment(
             vm_info["vm_ip"],
             artifacts_dir,
             config.get("max_steps", 15),
-            callback_url  # Pass callback_url for event pushing
+            callback_url,  # Pass callback_url for event pushing
+            config.get("model")  # Pass model for white agent
         )
 
         # Educational event: White agent execution completed
@@ -1822,24 +1829,123 @@ def _validate_white_agent_response(response_data: Dict[str, Any], tools: list[Di
     return True, None, action
 
 
+def _validate_white_agent_action(action: Dict[str, Any], tools: list[Dict[str, Any]]) -> tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Validate white agent action structure (for stateless /decide endpoint).
+
+    This is a simpler version of _validate_white_agent_response that validates
+    the action directly (not wrapped in A2A message format).
+
+    Validates:
+    - Action has required structure (op field)
+    - Action op is valid (matches a known tool or is "done"/"error")
+    - Action args match tool parameter requirements
+
+    Args:
+        action: Action dict from /decide response
+        tools: List of available tool specifications
+
+    Returns:
+        tuple of (is_valid, error_message, action)
+        - is_valid: True if action is valid
+        - error_message: Error description if invalid, None otherwise
+        - action: The validated action dict if valid, None otherwise
+    """
+    if not isinstance(action, dict):
+        return False, "Action must be a JSON object", None
+
+    # Validate action structure
+    if "op" not in action:
+        return False, "Action missing required field: op (operation name)", None
+
+    op = action["op"]
+    if not isinstance(op, str):
+        return False, "action.op must be a string", None
+
+    # Special case: "done" action
+    if op == "done":
+        return True, None, action
+
+    # Special case: "error" action (from white agent error handling)
+    if op == "error":
+        return True, None, action
+
+    # Check if op matches a known tool
+    tool_names = [t["name"] for t in tools]
+    if op not in tool_names:
+        return False, f"Unknown operation: {op}. Valid operations: {', '.join(tool_names)}", None
+
+    # Find the tool specification
+    tool_spec = next((t for t in tools if t["name"] == op), None)
+    if not tool_spec:
+        return False, f"Tool specification not found for: {op}", None
+
+    # Validate action args
+    args = action.get("args", {})
+    if not isinstance(args, dict):
+        return False, f"action.args must be an object, got {type(args).__name__}", None
+
+    # Check required parameters
+    required_params = tool_spec["parameters"].get("required", [])
+    for param in required_params:
+        if param not in args:
+            return False, f"Missing required parameter for {op}: {param}", None
+
+    # Validate parameter types (basic validation)
+    properties = tool_spec["parameters"].get("properties", {})
+    for param_name, param_value in args.items():
+        if param_name not in properties:
+            # Warn about unknown parameters but don't fail
+            logger.warning(f"Unknown parameter {param_name} for {op}")
+            continue
+
+        param_spec = properties[param_name]
+        expected_type = param_spec["type"]
+
+        # Type checking
+        type_map = {
+            "string": str,
+            "integer": int,
+            "number": (int, float),
+            "boolean": bool,
+            "array": list,
+            "object": dict
+        }
+
+        if expected_type in type_map:
+            expected_python_type = type_map[expected_type]
+            if not isinstance(param_value, expected_python_type):
+                return False, f"Parameter {param_name} must be {expected_type}, got {type(param_value).__name__}", None
+
+    return True, None, action
+
+
 async def _execute_with_white_agent(
     task_dict: Dict[str, Any],
     white_agent_url: str,
     vm_ip: str,
     artifacts_dir: str,
     max_steps: int,
-    callback_url: Optional[str]
+    callback_url: Optional[str],
+    model: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Execute assessment workflow with white agent via A2A protocol
+    Execute assessment workflow with STATELESS white agent.
+
+    STATELESS PROTOCOL:
+    - Green agent owns trajectory state
+    - Each request to white agent includes full trajectory
+    - No /reset needed - white agent creates fresh agent per request
+    - Supports Cloud Run auto-scaling (any instance can handle any request)
 
     This implements the full assessment loop:
-    1. Send initial task to white agent
+    1. Capture initial observation
     2. For each step:
+       - Send observation + trajectory to white agent
        - Get action from white agent
        - Execute action on OSWorld VM
-       - Capture observation
-       - Send observation back to white agent
+       - Capture new observation
+       - Append to trajectory
     3. Continue until task complete or max steps reached
 
     Args:
@@ -1868,27 +1974,24 @@ async def _execute_with_white_agent(
     step = 0
     success = False
     failure_reason = None
-    trajectory = []
+
+    # GREEN AGENT OWNS TRAJECTORY STATE (for stateless white agent protocol)
+    # This trajectory is passed to white agent with each request
+    # Format matches white_agent.rest.server.TrajectoryStep
+    trajectory = []  # Full trajectory for result
+    white_agent_trajectory = []  # Trajectory to send to white agent (text only, no screenshots)
 
     # Extract tools for validation
     tools = task_dict["metadata"].get("tools", [])
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         try:
-            # Step 0: Reset white agent to clear trajectory from previous assessments
-            # This prevents cross-task contamination where old observations/actions
-            # would be included in the LLM prompt for this new assessment
-            try:
-                reset_resp = await client.post(f"{white_agent_url}/reset", timeout=30.0)
-                if reset_resp.status_code == 200:
-                    logger.info(f"White agent reset successful before assessment {assessment_id}")
-                else:
-                    logger.warning(f"White agent reset returned status {reset_resp.status_code}")
-            except Exception as reset_err:
-                logger.warning(f"Failed to reset white agent (continuing anyway): {reset_err}")
+            # NOTE: No /reset call needed - white agent is stateless
+            # Each request creates a fresh PromptAgent instance
+            logger.info(f"Starting stateless white agent workflow for assessment {assessment_id}")
 
-            # Step 1: Send initial task to white agent
-            logger.info(f"Sending task to white agent at {white_agent_url}")
+            # Step 1: Capture initial observation
+            logger.info(f"Capturing initial observation from VM at {vm_ip}")
 
             # Initial observation - take screenshot and get accessibility tree
             screenshot_resp = await client.get(f"{osworld_base_url}/screenshot")
@@ -1913,26 +2016,8 @@ async def _execute_with_white_agent(
             # Save initial screenshot
             Path(f"{artifacts_dir}/step_0_initial.png").write_bytes(screenshot_resp.content)
 
-            # Build initial A2A task with observation
-            observation_data = {
-                "frame_id": 0,
-                "image_png_b64": screenshot_b64,
-                "instruction": task_dict["message"],
-                "done": False
-            }
-            # Include accessibility tree if available (for screenshot_a11y_tree mode)
-            if accessibility_tree:
-                observation_data["accessibility_tree"] = accessibility_tree
-
-            current_task = {
-                "task_id": task_dict["task_id"],
-                "context_id": task_dict["context_id"],
-                "message": task_dict["message"],
-                "metadata": {
-                    **task_dict["metadata"],
-                    "observation": observation_data
-                }
-            }
+            # Task instruction
+            instruction = task_dict["message"]
 
             # Initialize ActionTracker for loop detection
             action_tracker = None
@@ -1946,16 +2031,7 @@ async def _execute_with_white_agent(
 
             # Assessment loop
             while step < max_steps:
-                logger.info(f"Step {step}/{max_steps}")
-
-                # === LOOP DETECTION: Inject stuck feedback if detected in previous step ===
-                if stuck_feedback:
-                    logger.warning(f"[LoopDetection] === INJECTING STUCK FEEDBACK === Step {step}")
-                    original_instruction = current_task["metadata"]["observation"]["instruction"]
-                    modified_instruction = f"{stuck_feedback}\n\nOriginal task: {original_instruction}"
-                    current_task["metadata"]["observation"]["instruction"] = modified_instruction
-                    logger.debug(f"[LoopDetection] Feedback preview: {stuck_feedback[:200]}...")
-                    stuck_feedback = None  # Clear after injecting
+                logger.info(f"Step {step}/{max_steps} (trajectory: {len(white_agent_trajectory)} steps)")
 
                 # === PHASE 3: Enhanced Message Tracking ===
                 # Track message send timestamp
@@ -1963,7 +2039,7 @@ async def _execute_with_white_agent(
                 message_send_iso = datetime.now().isoformat()
                 message_id = f"msg-{assessment_id}-{step}"
 
-                logger.info(f"[{step}] Sending task to white agent...")
+                logger.info(f"[{step}] Sending observation to white agent (stateless)...")
 
                 # Push message sent event with full task payload
                 await _push_event_to_webui(callback_url, {
@@ -1973,17 +2049,36 @@ async def _execute_with_white_agent(
                     "timestamp": message_send_iso,
                     "payload": {
                         "role": "user",
-                        "instruction": current_task["metadata"]["observation"]["instruction"],
-                        "done": current_task["metadata"]["observation"]["done"],
-                        "has_screenshot": "image_png_b64" in current_task["metadata"]["observation"],
+                        "instruction": instruction,
+                        "done": False,
+                        "has_screenshot": True,
+                        "trajectory_length": len(white_agent_trajectory),
                         "observation_type": "screenshot_with_instruction"
                     }
                 })
 
-                # Get action from white agent
+                # Build request for STATELESS white agent /decide endpoint
+                # Include trajectory so white agent can rebuild context
+                decide_request = {
+                    "frame_id": step,
+                    "image_png_b64": screenshot_b64,
+                    "instruction": instruction,
+                    "accessibility_tree": accessibility_tree,
+                    "done": False,
+                    "stuck_feedback": stuck_feedback,
+                    "trajectory": white_agent_trajectory,  # Pass trajectory for stateless operation
+                }
+                # Add model if specified (from webui agent_config)
+                if model:
+                    decide_request["model"] = model
+
+                # Clear stuck_feedback after including in request
+                stuck_feedback = None
+
+                # Get action from white agent using /decide endpoint (stateless)
                 response = await client.post(
-                    f"{white_agent_url}/task",
-                    json=current_task,
+                    f"{white_agent_url}/decide",
+                    json=decide_request,
                     timeout=120.0
                 )
                 response.raise_for_status()
@@ -1995,10 +2090,25 @@ async def _execute_with_white_agent(
 
                 logger.info(f"[{step}] Received response from white agent (latency: {latency_ms}ms)")
 
-                message = response.json()
+                # Parse STATELESS /decide response format:
+                # {action: {op, args}, thought: str, trajectory_step: {accessibility_tree, action, thought}}
+                decide_response = response.json()
 
-                # Validate white agent response
-                is_valid, error_msg, action = _validate_white_agent_response(message, tools)
+                # Extract action from new response format
+                action = decide_response.get("action", {})
+                thought = decide_response.get("thought", "")
+                trajectory_step = decide_response.get("trajectory_step", {})
+
+                # Validate action has required fields
+                if not action or "op" not in action:
+                    error_msg = "Response missing action.op field"
+                    logger.error(f"Invalid white agent response: {error_msg}")
+                    logger.error(f"Full response: {decide_response}")
+                    failure_reason = f"Invalid response: {error_msg}"
+                    raise RuntimeError(f"White agent response validation failed: {error_msg}")
+
+                # Validate against tools if it's a tool action
+                is_valid, error_msg, validated_action = _validate_white_agent_action(action, tools)
                 validation_result = {
                     "valid": is_valid,
                     "errors": [error_msg] if not is_valid else []
@@ -2012,22 +2122,22 @@ async def _execute_with_white_agent(
                     "timestamp": message_receive_iso,
                     "latency_ms": latency_ms,
                     "payload": {
-                        "role": message.get("role", "assistant"),
-                        "content": message.get("content", ""),
+                        "role": "assistant",
+                        "content": thought,
                         "action": action,
-                        "done": message.get("metadata", {}).get("done", False),
-                        "metadata": message.get("metadata", {})
+                        "done": action.get("op") == "done",
+                        "trajectory_length": len(white_agent_trajectory)
                     },
                     "validation": validation_result
                 })
 
                 if not is_valid:
                     logger.error(f"Invalid white agent response: {error_msg}")
-                    logger.error(f"Full response: {message}")
+                    logger.error(f"Full response: {decide_response}")
                     failure_reason = f"Invalid response: {error_msg}"
                     raise RuntimeError(f"White agent response validation failed: {error_msg}")
 
-                is_done = message["metadata"].get("done", False)
+                is_done = action.get("op") == "done"
 
                 logger.info(f"White agent action: {action['op']}")
 
@@ -2059,14 +2169,18 @@ async def _execute_with_white_agent(
                     "direction": "white_to_green",
                     "type": "response",
                     "payload": {
-                        "role": message.get("role", "assistant"),
-                        "content": message["content"],
-                        "metadata": message.get("metadata", {}),
+                        "role": "assistant",
+                        "content": thought,
                         "action": action
                     },
                     "validation": validation_result,
                     "latency_ms": latency_ms
                 }
+
+                # === STATELESS: Append trajectory_step to white_agent_trajectory ===
+                # This will be passed to white agent in the next request
+                if trajectory_step:
+                    white_agent_trajectory.append(trajectory_step)
 
                 # === PHASE 3: Track Tool Execution (if not done) ===
                 tool_data = None
@@ -2187,7 +2301,7 @@ async def _execute_with_white_agent(
                 trajectory.append({
                     "step": step,
                     "action": action,
-                    "content": message["content"],
+                    "content": thought,  # Use thought from stateless response
                     "message_data": message_data,
                     "tool_data": tool_data
                 })
@@ -2249,28 +2363,15 @@ async def _execute_with_white_agent(
                         "timestamp": tool_end_iso
                     })
 
-                # Update task for next iteration
+                # Update step counter for next iteration
                 step += 1
 
-                # Build observation with accessibility tree if available
-                next_observation = {
-                    "frame_id": step,
-                    "image_png_b64": screenshot_b64,
-                    "instruction": task_dict["message"],
-                    "done": False
-                }
-                if accessibility_tree:
-                    next_observation["accessibility_tree"] = accessibility_tree
-
-                current_task = {
-                    "task_id": task_dict["task_id"],
-                    "context_id": task_dict["context_id"],
-                    "message": f"Step {step}: Previous action completed. Current state shown in screenshot.",
-                    "metadata": {
-                        **task_dict["metadata"],
-                        "observation": next_observation
-                    }
-                }
+                # NOTE: For stateless protocol, we don't need to build current_task
+                # The next iteration will use the updated:
+                # - screenshot_b64 (captured above)
+                # - accessibility_tree (captured above)
+                # - white_agent_trajectory (appended above)
+                # - instruction (unchanged)
 
             if not success and step >= max_steps:
                 failure_reason = f"Maximum steps ({max_steps}) reached"

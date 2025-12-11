@@ -25,15 +25,19 @@ logger = logging.getLogger(__name__)
 async def _push_event_to_webui(callback_url: Optional[str], event: Dict[str, Any]) -> None:
     """Push event to WebUI callback endpoint for real-time updates."""
     if not callback_url:
+        logger.debug(f"[Callback] No callback_url, skipping event: {event.get('type')}")
         return
 
+    logger.info(f"[Callback] Pushing event to {callback_url}: {event.get('type')}")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(callback_url, json=event)
             if response.status_code != 200:
-                logger.warning(f"WebUI callback failed: {response.status_code}")
+                logger.warning(f"[Callback] WebUI callback failed: {response.status_code}")
+            else:
+                logger.info(f"[Callback] Successfully pushed: {event.get('type')}")
     except Exception as e:
-        logger.warning(f"Failed to push event to WebUI: {e}")
+        logger.warning(f"[Callback] Failed to push event to WebUI: {e}")
 
 
 def make_json_serializable(obj: Any) -> Any:
@@ -67,6 +71,43 @@ except ImportError:
     ActionTracker = None
     LOOP_DETECTION_ENABLED = False
     logger.warning("[LoopDetection] ActionTracker not available - loop detection disabled")
+
+
+def classify_error(error: Exception, context: str = "") -> str:
+    """Classify an error into a category for reporting."""
+    error_str = str(error).lower()
+    error_type = type(error).__name__
+
+    # VM-related errors
+    if "vm" in error_str or "gcp" in error_str or "instance" in error_str:
+        return "vm_error"
+    if error_type == "TimeoutError" and ("vm" in context.lower() or "boot" in context.lower()):
+        return "vm_error"
+
+    # Setup errors
+    if "setup" in error_str or "setup" in context.lower():
+        return "setup_error"
+    if "config" in error_str and "task" in error_str:
+        return "setup_error"
+
+    # White agent errors
+    if "white_agent" in error_str or "agent" in context.lower():
+        return "agent_error"
+    if "connection" in error_str or "timeout" in error_str:
+        if "white" in context.lower() or "agent" in context.lower():
+            return "agent_error"
+
+    # Evaluation errors
+    if "evaluat" in error_str or "evaluat" in context.lower():
+        return "evaluation_error"
+    if "metric" in error_str or "getter" in error_str:
+        return "evaluation_error"
+
+    # Timeout errors
+    if error_type == "TimeoutError" or "timeout" in error_str:
+        return "timeout_error"
+
+    return "unknown_error"
 
 
 class GreenAgentExecutor(AgentExecutor):
@@ -130,13 +171,15 @@ class GreenAgentExecutor(AgentExecutor):
         try:
             # IMPORTANT: Emit a TaskStatusUpdateEvent immediately to enable non-blocking behavior
             # The A2A SDK only returns early (when blocking=false) after receiving a Task event
+            # NOTE: A2A SDK uses camelCase: taskId, contextId, and requires 'final' field
             await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
-                    task_id=task_id,
-                    context_id=context_id,
+                    taskId=task_id,
+                    contextId=context_id,
+                    final=False,  # Not final - task is still working
                     status=TaskStatus(
                         state=TaskState.working,
-                        message="Assessment accepted and starting execution"
+                        message=None  # Message object is complex, use None for status updates
                     )
                 )
             )
@@ -274,6 +317,11 @@ class GreenAgentExecutor(AgentExecutor):
         agent_config = metadata.get("agent_config", {})
         config["max_steps"] = metadata.get("max_steps") or agent_config.get("max_steps", 15)
         config["vm_image"] = metadata.get("vm_image") or agent_config.get("vm_image", "osworld-golden-v12-gnome")
+
+        # Extract model from agent_config (for white agent)
+        if agent_config.get("model"):
+            config["model"] = agent_config["model"]
+            logger.info(f"Model from agent_config: {config['model']}")
         config["metrics"] = metadata.get("metrics", ["success", "steps", "time_sec"])
         config["domain"] = metadata.get("domain")
 
@@ -321,7 +369,7 @@ class GreenAgentExecutor(AgentExecutor):
             await self._send_progress(event_queue, context_id, assessment_id, {
                 "type": "vm_creation_started",
                 "vm_image": config.get("vm_image", "osworld-golden-v12-gnome")
-            })
+            }, callback_url)
 
             vm_info = await asyncio.to_thread(
                 self._get_vm_manager().create_vm,
@@ -335,14 +383,14 @@ class GreenAgentExecutor(AgentExecutor):
                 "type": "vm_created",
                 "vm_name": vm_info['vm_name'],
                 "vm_ip": vm_info['vm_ip']
-            })
+            }, callback_url)
 
             # Step 2: Wait for VM ready
             logger.info("Waiting for VM to be ready...")
             await self._send_progress(event_queue, context_id, assessment_id, {
                 "type": "vm_waiting",
                 "message": "Waiting for VM to boot and OSWorld server to start"
-            })
+            }, callback_url)
 
             vm_ready = await asyncio.to_thread(
                 self._get_vm_manager().wait_for_vm_ready,
@@ -356,7 +404,7 @@ class GreenAgentExecutor(AgentExecutor):
             await self._send_progress(event_queue, context_id, assessment_id, {
                 "type": "vm_ready",
                 "vm_ip": vm_info["vm_ip"]
-            })
+            }, callback_url)
 
             # Step 3: Execute OSWorld task setup
             osworld_task = config.get("osworld_task")
@@ -373,7 +421,7 @@ class GreenAgentExecutor(AgentExecutor):
                 await self._send_progress(event_queue, context_id, assessment_id, {
                     "type": "setup_started",
                     "num_steps": len(osworld_task["config"])
-                })
+                }, callback_url)
 
                 setup_success = await asyncio.to_thread(
                     self._execute_osworld_setup,
@@ -386,7 +434,7 @@ class GreenAgentExecutor(AgentExecutor):
 
                 await self._send_progress(event_queue, context_id, assessment_id, {
                     "type": "setup_completed"
-                })
+                }, callback_url)
 
                 if SETUP_STABILIZATION_WAIT > 0:
                     await asyncio.sleep(SETUP_STABILIZATION_WAIT)
@@ -415,7 +463,7 @@ class GreenAgentExecutor(AgentExecutor):
                 "type": "white_agent_started",
                 "white_agent_url": config["white_agent_url"],
                 "max_steps": config.get("max_steps", 15)
-            })
+            }, callback_url)
 
             artifacts_dir = f"./temp_artifacts/{assessment_id}"
             Path(artifacts_dir).mkdir(parents=True, exist_ok=True)
@@ -426,13 +474,14 @@ class GreenAgentExecutor(AgentExecutor):
                 vm_info["vm_ip"],
                 artifacts_dir,
                 config.get("max_steps", 15),
-                callback_url
+                callback_url,
+                config.get("model")
             )
 
             await self._send_progress(event_queue, context_id, assessment_id, {
                 "type": "white_agent_completed",
                 "steps_taken": result.get("steps", 0)
-            })
+            }, callback_url)
 
             # Step 5: Evaluate
             if osworld_task and "evaluator" in osworld_task:
@@ -441,7 +490,7 @@ class GreenAgentExecutor(AgentExecutor):
 
                 await self._send_progress(event_queue, context_id, assessment_id, {
                     "type": "evaluation_started"
-                })
+                }, callback_url)
 
                 try:
                     from green_agent.osworld_evaluator import evaluate_task_with_llm_fallback
@@ -476,8 +525,9 @@ class GreenAgentExecutor(AgentExecutor):
                     await self._send_progress(event_queue, context_id, assessment_id, {
                         "type": "evaluation_completed",
                         "success": result["success"] == 1,
-                        "evaluation_score": evaluation_score
-                    })
+                        "evaluation_score": evaluation_score,
+                        "evaluation_method": result["evaluation_method"]
+                    }, callback_url)
 
                 except Exception as e:
                     logger.error(f"Evaluation error: {e}", exc_info=True)
@@ -527,6 +577,9 @@ class GreenAgentExecutor(AgentExecutor):
         except Exception as e:
             logger.error(f"Assessment failed: {e}", exc_info=True)
 
+            # Classify the error based on context
+            error_type = classify_error(e, context="assessment")
+
             # Cleanup VM on failure
             if vm_info:
                 try:
@@ -537,17 +590,19 @@ class GreenAgentExecutor(AgentExecutor):
                 except Exception as cleanup_error:
                     logger.error(f"VM cleanup failed: {cleanup_error}")
 
-            # Push error event to WebUI
+            # Push error event to WebUI with classification
             await _push_event_to_webui(callback_url, {
                 "type": "assessment_completed",
                 "timestamp": datetime.utcnow().isoformat(),
                 "success": False,
                 "error": str(e),
+                "error_type": error_type,
                 "message": f"Assessment failed: {str(e)}"
             })
 
             self.active_assessments[assessment_id]["status"] = "failed"
             self.active_assessments[assessment_id]["error"] = str(e)
+            self.active_assessments[assessment_id]["error_type"] = error_type
 
             raise
 
@@ -556,10 +611,13 @@ class GreenAgentExecutor(AgentExecutor):
         event_queue: EventQueue,
         context_id: str,
         task_id: str,
-        data: Dict[str, Any]
+        data: Dict[str, Any],
+        callback_url: Optional[str] = None
     ):
-        """Send progress update via event queue."""
+        """Send progress update via event queue and WebUI callback."""
         data["timestamp"] = datetime.utcnow().isoformat()
+
+        # Send to A2A event queue
         await event_queue.enqueue_event(
             new_agent_text_message(
                 json.dumps({"progress": data}),
@@ -567,6 +625,10 @@ class GreenAgentExecutor(AgentExecutor):
                 task_id=task_id
             )
         )
+
+        # Also push to WebUI callback URL for real-time updates
+        if callback_url:
+            await _push_event_to_webui(callback_url, data)
 
     def _extract_last_action(self, trajectory: list) -> Optional[str]:
         """Extract last action from trajectory for evaluation."""
@@ -645,13 +707,14 @@ class GreenAgentExecutor(AgentExecutor):
         vm_ip: str,
         artifacts_dir: str,
         max_steps: int,
-        callback_url: Optional[str]
+        callback_url: Optional[str],
+        model: Optional[str] = None
     ) -> Dict[str, Any]:
         """Execute assessment workflow with white agent."""
         # Import from original server
         from green_agent.a2a.server import _execute_with_white_agent
         return await _execute_with_white_agent(
-            task_dict, white_agent_url, vm_ip, artifacts_dir, max_steps, callback_url
+            task_dict, white_agent_url, vm_ip, artifacts_dir, max_steps, callback_url, model
         )
 
     def get_active_assessments(self) -> Dict[str, Dict[str, Any]]:

@@ -38,17 +38,22 @@ export default function LaunchPage() {
   // Configuration state with validation
   const [maxSteps, setMaxSteps] = useState(15);
   const [numRuns, setNumRuns] = useState(1);
-  const [model, setModel] = useState("gpt-4o");
+  const [model, setModel] = useState("gpt-5.1");
 
   // Available models for selection
+  // Model names must match what white_agent/prompt_agent.py supports
   const availableModels = [
-    { value: "gpt-4o", label: "GPT-4o", description: "OpenAI GPT-4o (recommended)" },
+    { value: "gpt-5.1", label: "GPT-5.1", description: "OpenAI GPT-5.1 (recommended)" },
+    { value: "gpt-5", label: "GPT-5", description: "OpenAI GPT-5" },
+    { value: "gpt-5-mini-2025-08-07", label: "GPT-5 Mini", description: "OpenAI GPT-5 Mini (faster, cheaper)" },
+    { value: "gpt-4o", label: "GPT-4o", description: "OpenAI GPT-4o" },
     { value: "gpt-4o-mini", label: "GPT-4o Mini", description: "OpenAI GPT-4o Mini (faster, cheaper)" },
-    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4", description: "Anthropic Claude Sonnet 4" },
-    { value: "claude-opus-4-20250514", label: "Claude Opus 4", description: "Anthropic Claude Opus 4 (most capable)" },
+    { value: "claude-opus-4-5", label: "Claude Opus 4.5", description: "Anthropic Claude Opus 4.5 (most capable)" },
+    { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", description: "Anthropic Claude Sonnet 4.5" },
+    { value: "claude-sonnet-4", label: "Claude Sonnet 4", description: "Anthropic Claude Sonnet 4" },
     { value: "qwen-vl-max", label: "Qwen VL Max", description: "Alibaba Qwen Vision-Language" },
     // Experimental models
-    { value: "langchain-gpt-4o", label: "⚗️ LangChain GPT-4o", description: "EXPERIMENTAL: GPT-4o + web search", experimental: true },
+    { value: "langchain-gpt-5.1", label: "⚗️ LangChain GPT-5.1", description: "EXPERIMENTAL: GPT-5.1 + web search", experimental: true },
   ];
 
   // Get selected tasks array from IDs
@@ -137,15 +142,7 @@ export default function LaunchPage() {
   const handleLaunch = useCallback(async () => {
     if (selectedTasks.length === 0 || launchMutation.isPending) return;
 
-    console.log("[Launch] Starting launch...", {
-      task_ids: selectedTasks.map((t) => t.id),
-      maxSteps,
-      numRuns,
-      model,
-    });
-
     try {
-      console.log("[Launch] Calling launchMutation.mutateAsync...");
       const result = await launchMutation.mutateAsync({
         task_ids: selectedTasks.map((t) => t.id),
         domain: selectedTasks[0]?.domain,
@@ -155,20 +152,14 @@ export default function LaunchPage() {
         model: model,
       });
 
-      console.log("[Launch] Got result:", result);
-
       // Always redirect to batch view for multi-task or if batch_id is present
       if (result.batch_id) {
-        console.log("[Launch] Redirecting to batch:", result.batch_id);
         router.push(`/batch/${result.batch_id}`);
       } else if (result.assessment_id) {
-        console.log("[Launch] Redirecting to assessment:", result.assessment_id);
         router.push(`/assessment/${result.assessment_id}/live`);
-      } else {
-        console.log("[Launch] No batch_id or assessment_id in result!");
       }
     } catch (error) {
-      console.error("[Launch] Failed:", error);
+      console.error("Launch failed:", error);
     }
   }, [selectedTasks, launchMutation, maxSteps, numRuns, model, router]);
 

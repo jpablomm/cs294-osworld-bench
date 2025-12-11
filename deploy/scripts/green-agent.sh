@@ -18,43 +18,28 @@ echo "Green Agent AgentBeats Deployment"
 echo "========================================="
 echo ""
 
-# Parse arguments
-PROJECT_ID=""
+# Configuration
+PROJECT_ID="cs294-475401"
 WITH_API_KEY=false
 
+# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --project)
-            PROJECT_ID="$2"
-            shift 2
-            ;;
         --with-api-key)
             WITH_API_KEY=true
             shift
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: bash deploy_green_agent.sh [--project PROJECT_ID] [--with-api-key]"
+            echo "Usage: bash deploy_green_agent.sh [--with-api-key]"
             exit 1
             ;;
     esac
 done
 
-# If no project specified, use gcloud config
-if [ -z "$PROJECT_ID" ]; then
-    PROJECT_ID=$(gcloud config get-value project)
-fi
-
-# Configuration
 REGION="us-central1"
 SERVICE_NAME="green-agent"
 IMAGE_TAG="gcr.io/$PROJECT_ID/$SERVICE_NAME"
-
-# Check if project is set
-if [ -z "$PROJECT_ID" ]; then
-    echo "Error: GCP project not set. Specify with --project or run: gcloud config set project PROJECT_ID"
-    exit 1
-fi
 
 echo "Project ID: $PROJECT_ID"
 echo "Region: $REGION"

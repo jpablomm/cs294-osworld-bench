@@ -21,38 +21,11 @@ echo "⚠️  This creates a SEPARATE Cloud Run service"
 echo "   Production 'green-agent' remains untouched"
 echo ""
 
-# Parse arguments
-PROJECT_ID=""
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --project)
-            PROJECT_ID="$2"
-            shift 2
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Usage: bash deploy_green_agent_agentbeats.sh [--project PROJECT_ID]"
-            exit 1
-            ;;
-    esac
-done
-
-# If no project specified, use gcloud config
-if [ -z "$PROJECT_ID" ]; then
-    PROJECT_ID=$(gcloud config get-value project)
-fi
-
-# Configuration
+# Configuration - hardcoded project
+PROJECT_ID="cs294-475401"
 REGION="us-central1"
-SERVICE_NAME="green-agent-agentbeats"  # Different from production!
+SERVICE_NAME="green-agent-agentbeats"
 IMAGE_TAG="$REGION-docker.pkg.dev/$PROJECT_ID/$SERVICE_NAME/$SERVICE_NAME"
-
-# Check if project is set
-if [ -z "$PROJECT_ID" ]; then
-    echo "Error: GCP project not set. Specify with --project or run: gcloud config set project PROJECT_ID"
-    exit 1
-fi
 
 echo "Project ID: $PROJECT_ID"
 echo "Region: $REGION"

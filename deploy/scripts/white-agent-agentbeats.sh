@@ -21,38 +21,11 @@ echo "  This creates a SEPARATE Cloud Run service"
 echo "   Production 'white-agent' remains untouched"
 echo ""
 
-# Parse arguments
-PROJECT_ID=""
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --project)
-            PROJECT_ID="$2"
-            shift 2
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Usage: bash deploy_white_agent_agentbeats.sh [--project PROJECT_ID]"
-            exit 1
-            ;;
-    esac
-done
-
-# If no project specified, use gcloud config
-if [ -z "$PROJECT_ID" ]; then
-    PROJECT_ID=$(gcloud config get-value project)
-fi
-
-# Configuration
+# Configuration - hardcoded project
+PROJECT_ID="cs294-475401"
 REGION="us-central1"
-SERVICE_NAME="white-agent-agentbeats"  # Different from production!
+SERVICE_NAME="white-agent-agentbeats"
 IMAGE_TAG="$REGION-docker.pkg.dev/$PROJECT_ID/$SERVICE_NAME/$SERVICE_NAME"
-
-# Check if project is set
-if [ -z "$PROJECT_ID" ]; then
-    echo "Error: GCP project not set. Specify with --project or run: gcloud config set project PROJECT_ID"
-    exit 1
-fi
 
 # Load environment variables from .env file if available
 if [ -f ".env" ]; then
@@ -65,12 +38,22 @@ if [ -z "$OPENAI_API_KEY" ]; then
     echo ""
     echo "ERROR: OPENAI_API_KEY not set!"
     echo ""
-    echo "The white agent requires an OpenAI API key for GPT-4V access."
+    echo "The white agent requires an OpenAI API key for GPT models."
     echo ""
     echo "Please create a .env file with:"
     echo "  OPENAI_API_KEY=sk-your-openai-api-key-here"
     echo ""
     exit 1
+fi
+
+# Optional: Anthropic API key for Claude models
+if [ -z "$ANTHROPIC_API_KEY" ]; then
+    echo "⚠️  WARNING: ANTHROPIC_API_KEY not set. Claude models will not work."
+fi
+
+# Optional: Tavily API key for web search
+if [ -z "$TAVILY_API_KEY" ]; then
+    echo "⚠️  WARNING: TAVILY_API_KEY not set. Web search will be disabled."
 fi
 
 echo "Project ID: $PROJECT_ID"
@@ -130,9 +113,18 @@ echo "Step 3: Deploying to Cloud Run..."
 
 # Build environment variables
 ENV_VARS="OPENAI_API_KEY=$OPENAI_API_KEY"
-ENV_VARS="$ENV_VARS,GPT4V_MODEL=${GPT4V_MODEL:-gpt-4o}"
+ENV_VARS="$ENV_VARS,GPT4V_MODEL=${GPT4V_MODEL:-gpt-5.1}"
 ENV_VARS="$ENV_VARS,GPT4V_TEMPERATURE=${GPT4V_TEMPERATURE:-1.0}"
 ENV_VARS="$ENV_VARS,HTTPS_ENABLED=true"
+
+# Add optional API keys if set
+if [ -n "$ANTHROPIC_API_KEY" ]; then
+    ENV_VARS="$ENV_VARS,ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+fi
+
+if [ -n "$TAVILY_API_KEY" ]; then
+    ENV_VARS="$ENV_VARS,TAVILY_API_KEY=$TAVILY_API_KEY"
+fi
 
 gcloud run deploy "$SERVICE_NAME" \
     --image "$IMAGE_TAG" \

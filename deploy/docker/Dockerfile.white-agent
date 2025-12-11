@@ -1,22 +1,23 @@
-# White Agent - REST API
-# FastAPI-based server for custom orchestrator integration
-# See white_agent/rest/ for the implementation
+# White Agent - A2A Protocol (direct, no earthshaker)
+# Deploys A2A-compliant white agent to Cloud Run
+# See white_agent/a2a/ for the full implementation
 
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    curl \
     gcc \
+    g++ \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirements-white-agent.txt .
+# Copy requirements (use the agentbeats requirements which include a2a SDK)
+COPY requirements-white-agent-agentbeats.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements-white-agent.txt
+RUN pip install --no-cache-dir -r requirements-white-agent-agentbeats.txt
 
 # Copy application code
 COPY white_agent/ white_agent/
@@ -35,5 +36,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Run FastAPI server directly
-CMD ["sh", "-c", "uvicorn white_agent.rest.server:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]
+# Run the A2A server directly (no earthshaker controller)
+CMD ["sh", "-c", "uvicorn white_agent.a2a.server:app --host ${HOST:-0.0.0.0} --port ${PORT:-8080}"]

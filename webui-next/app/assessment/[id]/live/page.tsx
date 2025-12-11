@@ -7,6 +7,7 @@ import {
   useAssessmentMessages,
   useToolExecutions,
   useAgentState,
+  useTask,
 } from "@/lib/api/queries";
 import { useSSE } from "@/lib/hooks/useSSE";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,6 +41,9 @@ export default function LiveAssessmentPage() {
   const { data: messages } = useAssessmentMessages(assessmentId);
   const { data: tools } = useToolExecutions(assessmentId);
   const { data: agentState } = useAgentState(assessmentId, shouldPollAgentState);
+
+  // Fetch task details for the instruction
+  const { data: task } = useTask(assessment?.task_id || "");
 
   // Real-time updates via SSE
   const { connected: sseConnected } = useSSE(assessmentId, {
@@ -158,7 +162,7 @@ export default function LiveAssessmentPage() {
       </div>
 
       {/* Task Instruction (collapsible header) */}
-      {(taskContext?.instruction || assessment.task_id) && (
+      {(task?.instruction || taskContext?.instruction || assessment.task_id) && (
         <Card className="bg-muted/30">
           <CardContent className="py-3">
             <div className="flex items-start gap-3">
@@ -167,9 +171,9 @@ export default function LiveAssessmentPage() {
                 <p className="text-sm font-medium truncate">
                   {assessment.task_id || assessmentId}
                 </p>
-                {taskContext?.instruction && (
+                {(task?.instruction || taskContext?.instruction) && (
                   <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                    {taskContext.instruction}
+                    {task?.instruction || taskContext?.instruction}
                   </p>
                 )}
               </div>

@@ -8,10 +8,11 @@ Directly uses PromptAgent for multi-model support (GPT-4V, Claude, Gemini, Qwen,
 Based on: https://github.com/agentbeats/agentify-example-tau-bench
 """
 
+import base64
 import json
 import logging
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 import uvicorn
 from dotenv import load_dotenv
@@ -201,6 +202,166 @@ class PromptAgentExecutor(AgentExecutor):
 # Backwards compatibility aliases
 UnifiedAgentExecutor = PromptAgentExecutor
 GPT4VAgentExecutor = PromptAgentExecutor
+
+
+def create_app():
+    """Create the A2A application for uvicorn."""
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.responses import JSONResponse
+
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("AGENT_PORT", os.environ.get("PORT", "8080")))
+    agent_url = os.getenv("AGENT_URL", f"http://{host}:{port}")
+
+    logger.info(f"Creating White Agent A2A app (Model: {MODEL}, URL: {agent_url})")
+
+    # Create agent card
+    card = prepare_agent_card(agent_url, MODEL)
+
+    # Create request handler with our executor
+    request_handler = DefaultRequestHandler(
+        agent_executor=PromptAgentExecutor(),
+        task_store=InMemoryTaskStore(),
+    )
+
+    # Create A2A application
+    a2a_app = A2AStarletteApplication(
+        agent_card=card,
+        http_handler=request_handler,
+    )
+
+    # Health check endpoint (required for Cloud Run)
+    async def health_check(request):
+        return JSONResponse({
+            "status": "healthy",
+            "agent_type": "white",
+            "protocol": "a2a",
+            "model": MODEL,
+            "observation_type": OBSERVATION_TYPE,
+        })
+
+    # Legacy agent-card endpoint for backwards compatibility
+    async def agent_card_endpoint(request):
+        return JSONResponse(card.model_dump(by_alias=True, exclude_none=True))
+
+    # Stateless /decide endpoint for green agent compatibility
+    # This mirrors the REST server's /decide endpoint
+    async def decide_endpoint(request):
+        """
+        Stateless action decision endpoint for green agent.
+
+        Creates fresh PromptAgent per request, rebuilds trajectory,
+        and returns action + thought + trajectory_step.
+        """
+        try:
+            body = await request.json()
+
+            frame_id = body.get("frame_id", 0)
+            image_png_b64 = body.get("image_png_b64", "")
+            instruction = body.get("instruction", "")
+            accessibility_tree = body.get("accessibility_tree")
+            stuck_feedback = body.get("stuck_feedback")
+            trajectory = body.get("trajectory", [])
+            # Use model from request if provided, otherwise use default
+            request_model = body.get("model", MODEL)
+
+            logger.info(f"[/decide] Frame {frame_id}: Processing with {len(trajectory)} history steps, model={request_model}")
+
+            # Create fresh agent for this request (stateless)
+            agent = PromptAgent(
+                model=request_model,
+                temperature=TEMPERATURE,
+                observation_type=OBSERVATION_TYPE,
+                action_space=ACTION_SPACE,
+                max_trajectory_length=MAX_TRAJECTORY_LENGTH,
+                max_tokens=MAX_TOKENS,
+                top_p=TOP_P,
+            )
+
+            # Rebuild trajectory from request (for stateless operation)
+            for step in trajectory:
+                # Each step should have: accessibility_tree, action, thought
+                step_a11y = step.get("accessibility_tree", "")
+                step_action = step.get("action", {})
+                step_thought = step.get("thought", "")
+
+                # Add to agent's trajectory (without screenshot since we don't store those)
+                # observations must be dicts with screenshot and accessibility_tree keys
+                agent.observations.append({
+                    "screenshot": None,
+                    "accessibility_tree": step_a11y
+                })
+                agent.actions.append(str(step_action))
+                agent.thoughts.append(step_thought)
+
+            # Build current observation
+            screenshot_bytes = base64.b64decode(image_png_b64) if image_png_b64 else None
+            obs_for_agent = {}
+            if screenshot_bytes:
+                obs_for_agent["screenshot"] = screenshot_bytes
+            if accessibility_tree:
+                obs_for_agent["accessibility_tree"] = accessibility_tree
+
+            # Inject stuck feedback if present
+            final_instruction = instruction
+            if stuck_feedback:
+                logger.warning(f"[/decide] Stuck feedback for frame {frame_id}")
+                final_instruction = f"{stuck_feedback}\n\nOriginal task: {instruction}"
+
+            # Get prediction from LLM
+            response, actions = agent.predict(final_instruction, obs_for_agent)
+
+            # Parse action using robust parser
+            parsed_action = parse_actions(response)
+
+            # Build trajectory step for green agent to store
+            trimmed_a11y = None
+            if accessibility_tree:
+                trimmed_a11y = accessibility_tree[:2000] if len(accessibility_tree) > 2000 else accessibility_tree
+
+            trajectory_step = {
+                "accessibility_tree": trimmed_a11y,
+                "action": parsed_action,
+                "thought": response,
+            }
+
+            logger.info(f"[/decide] Frame {frame_id}: Action={parsed_action.get('op', 'unknown')}")
+
+            return JSONResponse({
+                "action": parsed_action,
+                "thought": response,
+                "trajectory_step": trajectory_step,
+            })
+
+        except Exception as e:
+            logger.error(f"[/decide] Failed: {e}", exc_info=True)
+            error_action = {"op": "error", "args": {"message": str(e)}}
+            error_step = {
+                "accessibility_tree": None,
+                "action": error_action,
+                "thought": f"Error: {e}",
+            }
+            return JSONResponse({
+                "action": error_action,
+                "thought": f"Error: {e}",
+                "trajectory_step": error_step,
+            })
+
+    # Get A2A routes and add custom routes
+    a2a_routes = a2a_app.routes()
+    custom_routes = [
+        Route("/health", health_check, methods=["GET"]),
+        Route("/agent-card", agent_card_endpoint, methods=["GET"]),
+        Route("/decide", decide_endpoint, methods=["POST"]),
+    ]
+
+    # Create Starlette app with combined routes
+    return Starlette(routes=a2a_routes + custom_routes)
+
+
+# Module-level app for uvicorn
+app = create_app()
 
 
 def start_agent(host: str = "0.0.0.0", port: int = 8001):

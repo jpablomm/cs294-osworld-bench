@@ -18,7 +18,7 @@ else
   echo "No .env file found. Looking for environment variables..."
 fi
 
-# Configuration
+# Configuration - hardcoded project
 PROJECT_ID="cs294-475401"
 REGION="us-central1"
 SERVICE_NAME="white-agent"
@@ -29,7 +29,7 @@ if [ -z "$OPENAI_API_KEY" ]; then
   echo ""
   echo "❌ ERROR: OPENAI_API_KEY not set!"
   echo ""
-  echo "The white agent requires an OpenAI API key for GPT-4V access."
+  echo "The white agent requires an OpenAI API key for GPT models."
   echo ""
   echo "Please create a .env file with:"
   echo "  OPENAI_API_KEY=sk-your-openai-api-key-here"
@@ -42,6 +42,16 @@ if [ -z "$OPENAI_API_KEY" ]; then
   exit 1
 fi
 
+# Optional: Anthropic API key for Claude models
+if [ -z "$ANTHROPIC_API_KEY" ]; then
+  echo "⚠️  WARNING: ANTHROPIC_API_KEY not set. Claude models will not work."
+fi
+
+# Optional: Tavily API key for web search
+if [ -z "$TAVILY_API_KEY" ]; then
+  echo "⚠️  WARNING: TAVILY_API_KEY not set. Web search will be disabled."
+fi
+
 echo "Building Docker image..."
 gcloud builds submit \
   --config deploy/cloudbuild/white-agent.yaml \
@@ -49,6 +59,22 @@ gcloud builds submit \
 
 echo ""
 echo "Deploying to Cloud Run..."
+
+# Build environment variables
+ENV_VARS="OPENAI_API_KEY=${OPENAI_API_KEY}"
+ENV_VARS="${ENV_VARS},GPT4V_MODEL=${GPT4V_MODEL:-gpt-5.1}"
+ENV_VARS="${ENV_VARS},GPT4V_TEMPERATURE=${GPT4V_TEMPERATURE:-1.0}"
+ENV_VARS="${ENV_VARS},NODE_ENV=production"
+
+# Add optional API keys if set
+if [ -n "$ANTHROPIC_API_KEY" ]; then
+  ENV_VARS="${ENV_VARS},ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}"
+fi
+
+if [ -n "$TAVILY_API_KEY" ]; then
+  ENV_VARS="${ENV_VARS},TAVILY_API_KEY=${TAVILY_API_KEY}"
+fi
+
 gcloud run deploy $SERVICE_NAME \
   --image $IMAGE_NAME \
   --region $REGION \
@@ -59,10 +85,7 @@ gcloud run deploy $SERVICE_NAME \
   --cpu 2 \
   --timeout 300 \
   --max-instances 10 \
-  --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY}" \
-  --set-env-vars "GPT4V_MODEL=${GPT4V_MODEL:-gpt-4o}" \
-  --set-env-vars "GPT4V_TEMPERATURE=${GPT4V_TEMPERATURE:-1.0}" \
-  --set-env-vars "NODE_ENV=production" \
+  --set-env-vars "${ENV_VARS}" \
   --project $PROJECT_ID
 
 echo ""

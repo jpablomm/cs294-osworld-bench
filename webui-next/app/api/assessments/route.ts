@@ -83,8 +83,6 @@ async function launchTaskToGreenAgent(
     },
   };
 
-  console.log(`[LaunchTask] Sending A2A request to ${GREEN_AGENT_URL}/ for assessment ${assessmentId}`);
-
   // Fire-and-forget: Send the request but don't wait for the response
   // The A2A server may not support non-blocking mode, so we just fire the request
   // and let the callback_url handle status updates
@@ -95,16 +93,9 @@ async function launchTaskToGreenAgent(
       "X-API-Key": GREEN_AGENT_API_KEY,
     },
     body: JSON.stringify(a2aRequest),
-  })
-    .then(async (response) => {
-      const body = await response.json().catch(() => ({}));
-      console.log(`[LaunchTask] Green Agent response for ${assessmentId}:`, response.status, body);
-    })
-    .catch((error) => {
-      console.error(`[LaunchTask] Green Agent request failed for ${assessmentId}:`, error.message);
-    });
-
-  console.log(`[LaunchTask] Request sent for ${assessmentId} (fire-and-forget)`);
+  }).catch((error) => {
+    console.error(`Green Agent request failed for ${assessmentId}:`, error.message);
+  });
 }
 
 /**
@@ -112,10 +103,8 @@ async function launchTaskToGreenAgent(
  * Launch new assessment(s) - supports both single task and multi-task
  */
 export async function POST(request: NextRequest) {
-  console.log(`[POST /api/assessments] Request received`);
   try {
     const body: LaunchAssessmentRequest = await request.json();
-    console.log(`[POST /api/assessments] Body:`, JSON.stringify(body, null, 2));
 
     // Normalize to array (backward compatible)
     const taskIds = body.task_ids || (body.task_id ? [body.task_id] : []);
@@ -252,18 +241,14 @@ export async function POST(request: NextRequest) {
       response.failed_tasks = failedTasks;
     }
 
-    console.log(`[POST /api/assessments] Final response:`, JSON.stringify(response, null, 2));
-
     // Return appropriate status code
     if (status === "failed") {
-      console.log(`[POST /api/assessments] Returning 500 - all tasks failed`);
       return NextResponse.json(
         { ...response, error: "All tasks failed to launch" },
         { status: 500 }
       );
     }
 
-    console.log(`[POST /api/assessments] Returning 200 - success`);
     return NextResponse.json(response);
   } catch (error) {
     console.error("Error launching assessment:", error);

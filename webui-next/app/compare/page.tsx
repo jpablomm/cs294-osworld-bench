@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useConfigs, useConfigComparison } from "@/lib/api/queries";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,35 @@ import {
 import type { ConfigSummary } from "@/lib/db/client";
 
 export default function ComparePage() {
+  return (
+    <Suspense fallback={<ComparePageLoading />}>
+      <ComparePageContent />
+    </Suspense>
+  );
+}
+
+function ComparePageLoading() {
+  return (
+    <div className="container max-w-6xl mx-auto py-8">
+      <div className="flex flex-col gap-8">
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <Scale className="h-8 w-8 text-primary" />
+            <h1 className="text-3xl font-bold tracking-tight">Compare Configs</h1>
+          </div>
+          <p className="text-muted-foreground">
+            Select two agent configurations to compare their performance side-by-side
+          </p>
+        </div>
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComparePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 

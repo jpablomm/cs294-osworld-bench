@@ -12,7 +12,7 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
-    const assessment = getAssessment(id);
+    const assessment = await getAssessment(id);
 
     if (!assessment) {
       return NextResponse.json(

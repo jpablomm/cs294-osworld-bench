@@ -72,7 +72,9 @@ export async function POST(
       // Update evaluation results
       assessment.success = event.success ? 1 : 0;
       assessment.evaluation_score = event.evaluation_score;
-      assessment.evaluation_method = "osworld_benchmark";
+      if (event.evaluation_method) {
+        assessment.evaluation_method = event.evaluation_method;
+      }
     } else if (eventType === "assessment_summary") {
       // Update final metrics
       assessment.success = event.success ? 1 : 0;
@@ -80,10 +82,22 @@ export async function POST(
       assessment.time_sec = event.time_sec;
       assessment.vm_cost = event.vm_cost;
       assessment.evaluation_score = event.evaluation_score;
+      if (event.evaluation_method) {
+        assessment.evaluation_method = event.evaluation_method;
+      }
     } else if (eventType === "assessment_completed") {
       // Mark as completed
       assessment.status = event.success ? "completed" : "failed";
       assessment.completed_at = new Date().toISOString();
+      // Save error/failure reason and type if present
+      if (!event.success) {
+        if (event.error || event.message) {
+          assessment.failure_reason = event.error || event.message;
+        }
+        if (event.error_type) {
+          assessment.error_type = event.error_type;
+        }
+      }
     }
 
     // Save updated assessment

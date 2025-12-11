@@ -394,68 +394,112 @@ class PromptAgent:
         for previous_obs, previous_action, previous_thought in zip(_observations, _actions, _thoughts):
 
             # {{{1
+            # NOTE: For stateless operation, historical observations may have screenshot=None
+            # In that case, we only include the accessibility tree (text-only history)
+            _screenshot = previous_obs.get("screenshot")
+            _linearized_accessibility_tree = previous_obs.get("accessibility_tree")
+
             if self.observation_type == "screenshot_a11y_tree":
-                _screenshot = previous_obs["screenshot"]
-                _linearized_accessibility_tree = previous_obs["accessibility_tree"]
-
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Given the screenshot and info from accessibility tree as below:\n{}\nWhat's the next step that you will do to help with the task?".format(
-                                _linearized_accessibility_tree)
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{_screenshot}",
-                                "detail": "high"
+                # If screenshot is None (stateless mode), use text-only history
+                if _screenshot is None:
+                    if _linearized_accessibility_tree:
+                        messages.append({
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Given the info from accessibility tree as below:\n{}\nWhat's the next step that you will do to help with the task?".format(
+                                        _linearized_accessibility_tree)
+                                }
+                            ]
+                        })
+                    else:
+                        messages.append({
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "What's the next step that you will do to help with the task?"
+                                }
+                            ]
+                        })
+                else:
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Given the screenshot and info from accessibility tree as below:\n{}\nWhat's the next step that you will do to help with the task?".format(
+                                    _linearized_accessibility_tree)
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{_screenshot}",
+                                    "detail": "high"
+                                }
                             }
-                        }
-                    ]
-                })
+                        ]
+                    })
             elif self.observation_type in ["som"]:
-                _screenshot = previous_obs["screenshot"]
-
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Given the tagged screenshot as below. What's the next step that you will do to help with the task?"
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{_screenshot}",
-                                "detail": "high"
+                # If screenshot is None (stateless mode), skip image
+                if _screenshot is None:
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "What's the next step that you will do to help with the task?"
                             }
-                        }
-                    ]
-                })
+                        ]
+                    })
+                else:
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Given the tagged screenshot as below. What's the next step that you will do to help with the task?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{_screenshot}",
+                                    "detail": "high"
+                                }
+                            }
+                        ]
+                    })
             elif self.observation_type == "screenshot":
-                _screenshot = previous_obs["screenshot"]
-
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Given the screenshot as below. What's the next step that you will do to help with the task?"
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{_screenshot}",
-                                "detail": "high"
+                # If screenshot is None (stateless mode), skip image
+                if _screenshot is None:
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "What's the next step that you will do to help with the task?"
                             }
-                        }
-                    ]
-                })
+                        ]
+                    })
+                else:
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Given the screenshot as below. What's the next step that you will do to help with the task?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{_screenshot}",
+                                    "detail": "high"
+                                }
+                            }
+                        ]
+                    })
             elif self.observation_type == "a11y_tree":
-                _linearized_accessibility_tree = previous_obs["accessibility_tree"]
-
                 messages.append({
                     "role": "user",
                     "content": [
@@ -797,12 +841,13 @@ class PromptAgent:
                 "content-type": "application/json"
             }
 
+            # Claude API doesn't allow both temperature and top_p for newer models
+            # Use only temperature for consistency
             payload = {
                 "model": self.model,
                 "max_tokens": max_tokens,
                 "messages": claude_messages,
                 "temperature": temperature,
-                "top_p": top_p
             }
 
             response = requests.post(
@@ -1218,8 +1263,9 @@ class PromptAgent:
             )
             if not langchain_available:
                 raise ImportError("LangChain not available. Install with: pip install langchain langchain-openai langchain-core")
+            # DeepAgents is optional - only needed for web search capability
             if not deepagents_available:
-                raise ImportError("DeepAgents not available. Install with: pip install deepagents")
+                logger.info("DeepAgents not available - web search disabled. Install with: pip install deepagents")
 
             messages = payload["messages"]
             max_tokens = payload["max_tokens"]
@@ -1233,34 +1279,42 @@ class PromptAgent:
             else:
                 underlying_model = "gpt-4o"  # default
 
-            # Determine API key based on underlying model
+            # Determine API key and provider based on underlying model
             if underlying_model.startswith("gpt") or underlying_model.startswith("o1") or underlying_model.startswith("o3"):
                 api_key = os.environ.get("OPENAI_API_KEY")
+                model_provider = "openai"
             elif underlying_model.startswith("claude"):
                 api_key = os.environ.get("ANTHROPIC_API_KEY")
+                model_provider = "anthropic"
             else:
                 api_key = os.environ.get("OPENAI_API_KEY")  # default to OpenAI
+                model_provider = "openai"
 
-            # Initialize LangChain chat model
+            # Initialize LangChain chat model with explicit provider
             llm = init_chat_model(
                 model=underlying_model,
+                model_provider=model_provider,
                 api_key=api_key,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
 
             # Optionally wrap with DeepAgents for web search capability
-            if tavily_available and os.environ.get("TAVILY_API_KEY"):
+            if deepagents_available and tavily_available and os.environ.get("TAVILY_API_KEY"):
+                logger.info("Tavily web search enabled - wrapping LLM with DeepAgents")
                 tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
 
                 def tavily_search(query: str, max_results: int = 5, include_raw_content: bool = False):
                     """Run a web search"""
-                    return tavily_client.search(
+                    logger.info(f"[Tavily] Executing web search: query='{query}', max_results={max_results}")
+                    result = tavily_client.search(
                         query,
                         max_results=max_results,
                         include_raw_content=include_raw_content,
                         topic="general",
                     )
+                    logger.info(f"[Tavily] Search completed, got {len(result.get('results', []))} results")
+                    return result
 
                 llm = create_deep_agent(model=llm, system_prompt="", tools=[tavily_search])
 

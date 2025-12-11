@@ -196,8 +196,8 @@ def _signal_handler(signum, frame):
     sig_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
     logger.warning(f"Received {sig_name} - initiating graceful shutdown...")
     _cleanup_handler()
-    # Don't call sys.exit() here - let uvicorn handle shutdown gracefully
-    # The cleanup is done, uvicorn will exit on its own
+    # Raise KeyboardInterrupt to let uvicorn handle shutdown
+    raise KeyboardInterrupt
 
 
 def create_app() -> Starlette:

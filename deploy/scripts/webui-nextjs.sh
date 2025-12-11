@@ -25,6 +25,7 @@ SERVICE_NAME="webui-nextjs"
 IMAGE_NAME="us-central1-docker.pkg.dev/${PROJECT_ID}/green-agent/webui-nextjs:latest"
 
 # Green Agent configuration (can be overridden in .env)
+# Uses direct A2A agents (not agentbeats) for webui experiments
 GREEN_AGENT_URL="${GREEN_AGENT_URL:-https://green-agent-b6s4fydcmq-uc.a.run.app}"
 GREEN_AGENT_API_KEY="${GREEN_AGENT_API_KEY:-c7f43943c72dec3b3c84b25f9aa8a548d4f285ca33f12a9929730d01379da5e3}"
 
