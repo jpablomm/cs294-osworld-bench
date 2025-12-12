@@ -109,7 +109,8 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
             if not line or line.startswith('#') or line.startswith('import') or line.startswith('time.'):
                 continue
             if line.startswith('pyautogui.') or any(line.startswith(f'{cmd}(') for cmd in
-                ['click', 'type_text', 'hotkey', 'scroll', 'doubleClick', 'rightClick']):
+                ['click', 'type_text', 'hotkey', 'scroll', 'doubleClick', 'rightClick',
+                 'moveTo', 'moveRel', 'drag', 'dragTo', 'mouseDown', 'mouseUp', 'press']):
                 actions_str = line
                 break
         else:
@@ -125,7 +126,22 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
         logger.info("moveRel detected - treating as wait")
         return {"op": "wait", "args": {"duration": 0.5}}
 
-    # Parse click actions
+    # Parse moveTo action
+    if match := re.match(r'(?:pyautogui\.)?moveTo\((?:x=)?(\d+),\s*(?:y=)?(\d+)(?:,\s*duration=[\d.]+)?\)', actions_str):
+        return {"op": "move", "args": {"x": int(match.group(1)), "y": int(match.group(2))}}
+
+    # Parse click with button parameter (must be before simple click pattern)
+    # Handles: pyautogui.click(x, y, button='right') or click(x, y, button='left')
+    if match := re.match(r'(?:pyautogui\.)?click\((?:x=)?(\d+),\s*(?:y=)?(\d+),\s*button=["\'](\w+)["\']', actions_str):
+        x, y, button = int(match.group(1)), int(match.group(2)), match.group(3)
+        if button == 'right':
+            return {"op": "right_click", "args": {"x": x, "y": y}}
+        elif button == 'middle':
+            return {"op": "click", "args": {"x": x, "y": y, "button": "middle"}}
+        else:  # left or default
+            return {"op": "click", "args": {"x": x, "y": y}}
+
+    # Parse simple click actions
     if match := re.match(r'(?:pyautogui\.)?click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
         return {"op": "click", "args": {"x": int(match.group(1)), "y": int(match.group(2))}}
 
@@ -136,7 +152,7 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
     if match := re.match(r'(?:pyautogui\.)?doubleClick\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
         return {"op": "double_click", "args": {"x": int(match.group(1)), "y": int(match.group(2))}}
 
-    # Parse right click
+    # Parse right click (explicit rightClick function)
     if match := re.match(r'(?:pyautogui\.)?rightClick\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', actions_str):
         return {"op": "right_click", "args": {"x": int(match.group(1)), "y": int(match.group(2))}}
 
@@ -160,6 +176,26 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
     # Parse scroll
     if match := re.match(r'(?:pyautogui\.)?scroll\((-?\d+)\)', actions_str):
         return {"op": "scroll", "args": {"amount": int(match.group(1))}}
+
+    # Parse drag operations (convert to execute_python since VM doesn't have native drag)
+    if match := re.match(r'(?:pyautogui\.)?drag\((-?\d+),\s*(-?\d+)', actions_str):
+        dx, dy = int(match.group(1)), int(match.group(2))
+        logger.info(f"drag detected - converting to execute_python")
+        return {"op": "execute_python", "args": {"code": f"import pyautogui; pyautogui.drag({dx}, {dy}, duration=0.5)"}}
+
+    if match := re.match(r'(?:pyautogui\.)?dragTo\((\d+),\s*(\d+)', actions_str):
+        x, y = int(match.group(1)), int(match.group(2))
+        logger.info(f"dragTo detected - converting to execute_python")
+        return {"op": "execute_python", "args": {"code": f"import pyautogui; pyautogui.dragTo({x}, {y}, duration=0.5)"}}
+
+    # Parse mouseDown/mouseUp (part of drag sequences - convert to wait with warning)
+    if re.match(r'(?:pyautogui\.)?mouseDown\(', actions_str):
+        logger.warning("mouseDown detected - VM doesn't support partial drag, use execute_python for drag sequences")
+        return {"op": "wait", "args": {"duration": 0.5}}
+
+    if re.match(r'(?:pyautogui\.)?mouseUp\(', actions_str):
+        logger.warning("mouseUp detected - VM doesn't support partial drag, use execute_python for drag sequences")
+        return {"op": "wait", "args": {"duration": 0.5}}
 
     # Default: wait
     logger.warning(f"Unknown action format: {actions_str}, defaulting to wait")

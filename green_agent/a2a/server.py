@@ -2076,10 +2076,18 @@ async def _execute_with_white_agent(
                 stuck_feedback = None
 
                 # Get action from white agent using /decide endpoint (stateless)
+                # Use structured timeout: generous read time for LLM processing (especially spreadsheet tasks),
+                # and adequate write time for large payloads (screenshot + trajectory)
+                decide_timeout = httpx.Timeout(
+                    connect=30.0,   # 30s to establish connection
+                    read=300.0,     # 5 min for LLM to process and respond
+                    write=120.0,    # 2 min to send large payload
+                    pool=30.0       # 30s for connection pool
+                )
                 response = await client.post(
                     f"{white_agent_url}/decide",
                     json=decide_request,
-                    timeout=120.0
+                    timeout=decide_timeout
                 )
                 response.raise_for_status()
 
