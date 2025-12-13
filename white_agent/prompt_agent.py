@@ -92,6 +92,24 @@ logger = logging.getLogger("white_agent.prompt_agent")
 
 pure_text_settings = ['a11y_tree']
 
+# Groq model configurations (updated December 2025)
+# See https://console.groq.com/docs/models for latest models
+#
+# Only including VISION-CAPABLE models for screenshot-based tasks
+GROQ_MODELS = {
+    # Llama 4 multimodal models (support images)
+    "meta-llama/llama-4-maverick-17b-128e-instruct",  # Llama 4 Maverick - 600 t/s, vision, $0.20/$0.60
+    "meta-llama/llama-4-scout-17b-16e-instruct",      # Llama 4 Scout - 750 t/s, vision, $0.11/$0.34
+}
+
+# User-friendly name mappings (for groq-* prefix usage)
+GROQ_MODEL_MAPPING = {
+    "llama4-maverick": "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "llama4-scout": "meta-llama/llama-4-scout-17b-16e-instruct",
+    # Short aliases
+    "llama4": "meta-llama/llama-4-scout-17b-16e-instruct",  # Default to Scout (faster)
+}
+
 attributes_ns_ubuntu = "https://accessibility.windows.example.org/ns/attributes"
 attributes_ns_windows = "https://accessibility.windows.example.org/ns/attributes"
 state_ns_ubuntu = "https://accessibility.ubuntu.example.org/ns/state"
@@ -1116,57 +1134,78 @@ class PromptAgent:
 
             return response.text
 
-        elif self.model == "llama3-70b":
+        elif self.model.startswith("groq-") or self.model in GROQ_MODELS:
+            # Groq API with Llama 4 vision models
+            # Supports: llama-4-maverick, llama-4-scout (both multimodal)
             messages = payload["messages"]
             max_tokens = payload["max_tokens"]
             top_p = payload["top_p"]
             temperature = payload["temperature"]
 
-            assert self.observation_type in pure_text_settings, f"The model {self.model} can only support text-based input, please consider change based model or settings"
+            # Map user-friendly names to actual Groq model IDs
+            if self.model.startswith("groq-"):
+                model_name = self.model[5:]  # Remove "groq-" prefix
+                groq_model = GROQ_MODEL_MAPPING.get(model_name, model_name)
+            else:
+                groq_model = self.model
 
+            # Build messages with vision support (OpenAI-compatible format)
             groq_messages = []
-
-            for i, message in enumerate(messages):
+            for message in messages:
                 groq_message = {
                     "role": message["role"],
-                    "content": ""
+                    "content": []
                 }
-
                 for part in message["content"]:
-                    groq_message['content'] = part['text'] if part['type'] == "text" else ""
-
+                    if part['type'] == "text":
+                        groq_message['content'].append({
+                            "type": "text",
+                            "text": part['text']
+                        })
+                    elif part['type'] == "image_url":
+                        # Groq uses OpenAI-compatible image format
+                        groq_message['content'].append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": part['image_url']['url']
+                            }
+                        })
                 groq_messages.append(groq_message)
 
-            # The implementation based on Groq API
-            client = Groq(
-                api_key=get_groq_api_key(),
-            )
+            # Initialize Groq client
+            api_key = get_groq_api_key()
+            if not api_key:
+                raise ValueError("GROQ_API_KEY environment variable is required for Groq models")
 
+            client = Groq(api_key=api_key)
+
+            # Retry logic with context reduction on failure
             flag = 0
-            while True:
+            response = None
+            while flag <= 5:  # Reduced retries for vision models
                 try:
-                    if flag > 20:
-                        break
-                    logger.info("Generating content with model: %s", self.model)
+                    logger.info("Generating content with Groq model: %s", groq_model)
                     response = client.chat.completions.create(
                         messages=groq_messages,
-                        model="llama3-70b-8192",
+                        model=groq_model,
                         max_tokens=max_tokens,
                         top_p=top_p,
                         temperature=temperature
                     )
                     break
-                except:
-                    if flag == 0:
-                        groq_messages = [groq_messages[0]] + groq_messages[-1:]
-                    else:
-                        groq_messages[-1]["content"] = ' '.join(groq_messages[-1]["content"].split()[:-500])
-                    flag = flag + 1
+                except Exception as e:
+                    logger.warning("Groq API call failed (attempt %d): %s", flag + 1, str(e))
+                    flag += 1
+                    time.sleep(2)  # Brief delay before retry
+
+            if response is None:
+                logger.error("Failed to get response from Groq after %d retries", flag)
+                return ""
 
             try:
                 return response.choices[0].message.content
             except Exception as e:
-                print("Failed to call LLM: " + str(e))
+                logger.error("Failed to parse Groq response: %s", str(e))
                 return ""
 
         elif self.model.startswith("qwen"):

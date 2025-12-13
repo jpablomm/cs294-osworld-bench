@@ -30,6 +30,9 @@ openai==1.59.3
 # Anthropic API (needed for Claude models - Sonnet 4.5, Opus 4, etc.)
 anthropic>=0.40.0
 
+# Groq API (needed for Llama 3, Mixtral, Gemma models)
+groq>=0.13.0
+
 # Requests (needed by OSWorld agents)
 requests==2.32.3
 
@@ -38,6 +41,6 @@ backoff==2.2.1
 tiktoken==0.8.0
 
 # Note: Removed heavy dependencies that aren't needed:
-# - dashscope, google-generativeai, groq - only using OpenAI
+# - dashscope, google-generativeai - only using OpenAI/Anthropic/Groq
 # - torch, transformers - not needed, we use OpenAI API
 # - pyautogui, mss, pynput - GUI automation not needed on server
