@@ -58,3 +58,8 @@ def get_genai_api_key() -> str | None:
 
 def get_groq_api_key() -> str | None:
     return os.environ.get("GROQ_API_KEY")
+
+
+def get_qwen3_vl_endpoint_url() -> str | None:
+    """Get Qwen3-VL Vertex AI endpoint URL."""
+    return os.environ.get("QWEN3_VL_ENDPOINT_URL")

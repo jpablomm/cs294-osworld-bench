@@ -25,6 +25,7 @@ from white_agent.config import (
     get_reasoning_effort,
     get_genai_api_key,
     get_groq_api_key,
+    get_qwen3_vl_endpoint_url,
 )
 
 import backoff
@@ -108,6 +109,27 @@ GROQ_MODEL_MAPPING = {
     "llama4-scout": "meta-llama/llama-4-scout-17b-16e-instruct",
     # Short aliases
     "llama4": "meta-llama/llama-4-scout-17b-16e-instruct",  # Default to Scout (faster)
+}
+
+# Qwen3-VL models on Vertex AI (vision + GUI automation)
+# Deploy with: python scripts/vertex-ai/deploy_qwen3_vl.py --project YOUR_PROJECT
+QWEN3_VL_MODELS = {
+    # 30B models (faster, cheaper)
+    "qwen3-vl-30b-instruct",
+    "qwen3-vl-30b-thinking",
+    # 235B models (more capable)
+    "qwen3-vl-235b-instruct",
+    "qwen3-vl-235b-thinking",
+}
+
+# Map user-friendly names to Vertex AI model names
+QWEN3_VL_MODEL_MAPPING = {
+    "qwen3-vl-30b-instruct": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+    "qwen3-vl-30b-thinking": "Qwen/Qwen3-VL-30B-A3B-Thinking",
+    "qwen3-vl-235b-instruct": "Qwen/Qwen3-VL-235B-A22B-Instruct",
+    "qwen3-vl-235b-thinking": "Qwen/Qwen3-VL-235B-A22B-Thinking",
+    # Short aliases
+    "qwen3-vl": "Qwen/Qwen3-VL-235B-A22B-Instruct",  # Default to 235B instruct
 }
 
 attributes_ns_ubuntu = "https://accessibility.windows.example.org/ns/attributes"
@@ -1173,6 +1195,9 @@ class PromptAgent:
                 groq_messages.append(groq_message)
 
             # Initialize Groq client
+            if Groq is None:
+                raise ImportError("groq package is not installed. Run: pip install groq")
+
             api_key = get_groq_api_key()
             if not api_key:
                 raise ValueError("GROQ_API_KEY environment variable is required for Groq models")
@@ -1206,6 +1231,69 @@ class PromptAgent:
                 return response.choices[0].message.content
             except Exception as e:
                 logger.error("Failed to parse Groq response: %s", str(e))
+                return ""
+
+        elif self.model.startswith("qwen3-vl") or self.model in QWEN3_VL_MODELS:
+            # Qwen3-VL on Vertex AI (OpenAI-compatible API)
+            # Deploy with: python scripts/vertex-ai/deploy_qwen3_vl.py
+            messages = payload["messages"]
+            max_tokens = payload["max_tokens"]
+            top_p = payload["top_p"]
+            temperature = payload["temperature"]
+
+            # Get endpoint URL
+            endpoint_url = get_qwen3_vl_endpoint_url()
+            if not endpoint_url:
+                raise ValueError(
+                    "QWEN3_VL_ENDPOINT_URL environment variable is required. "
+                    "Deploy the model first: python scripts/vertex-ai/deploy_qwen3_vl.py --project YOUR_PROJECT"
+                )
+
+            # Map user-friendly names to actual model names
+            vertex_model = QWEN3_VL_MODEL_MAPPING.get(self.model, self.model)
+
+            # Build OpenAI-compatible messages (Vertex AI uses this format)
+            qwen3_messages = []
+            for message in messages:
+                qwen3_message = {
+                    "role": message["role"],
+                    "content": []
+                }
+                for part in message["content"]:
+                    if part['type'] == "text":
+                        qwen3_message['content'].append({
+                            "type": "text",
+                            "text": part['text']
+                        })
+                    elif part['type'] == "image_url":
+                        qwen3_message['content'].append({
+                            "type": "image_url",
+                            "image_url": {"url": part['image_url']['url']}
+                        })
+                qwen3_messages.append(qwen3_message)
+
+            # Use OpenAI client with Vertex AI endpoint
+            if openai is None:
+                raise ImportError("openai package is not installed. Run: pip install openai")
+
+            client = openai.OpenAI(
+                api_key="",  # Vertex AI uses GCP auth, not API key
+                base_url=endpoint_url,
+                timeout=3600,  # Long timeout for large models
+            )
+
+            try:
+                logger.info("Generating content with Qwen3-VL model: %s", vertex_model)
+                response = client.chat.completions.create(
+                    model=vertex_model,
+                    messages=qwen3_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error("Qwen3-VL API call failed: %s", str(e))
                 return ""
 
         elif self.model.startswith("qwen"):

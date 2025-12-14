@@ -52,6 +52,12 @@ export default function LaunchPage() {
     { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", description: "Anthropic Claude Sonnet 4.5" },
     { value: "claude-sonnet-4", label: "Claude Sonnet 4", description: "Anthropic Claude Sonnet 4" },
     { value: "qwen-vl-max", label: "Qwen VL Max", description: "Alibaba Qwen Vision-Language" },
+    // Groq models (Llama 4 with vision)
+    { value: "groq-llama4-scout", label: "Groq Llama 4 Scout", description: "Llama 4 Scout 17B - 750 t/s, vision" },
+    { value: "groq-llama4-maverick", label: "Groq Llama 4 Maverick", description: "Llama 4 Maverick 17B - 600 t/s, vision (more capable)" },
+    // Qwen3-VL on Vertex AI (requires deployment)
+    { value: "qwen3-vl-235b-instruct", label: "Qwen3-VL 235B", description: "Qwen3-VL 235B on Vertex AI - vision, GUI automation" },
+    { value: "qwen3-vl-30b-instruct", label: "Qwen3-VL 30B", description: "Qwen3-VL 30B on Vertex AI - faster, cheaper" },
     // Experimental models
     { value: "langchain-gpt-5.1", label: "⚗️ LangChain GPT-5.1", description: "EXPERIMENTAL: GPT-5.1 + web search", experimental: true },
   ];
