@@ -1272,26 +1272,112 @@ class PromptAgent:
                         })
                 qwen3_messages.append(qwen3_message)
 
-            # Use OpenAI client with Vertex AI endpoint
-            if openai is None:
-                raise ImportError("openai package is not installed. Run: pip install openai")
+            # Use Vertex AI prediction API with chatCompletions format
+            # Get GCP access token for authentication
+            try:
+                import google.auth
+                import google.auth.transport.requests
 
-            client = openai.OpenAI(
-                api_key="",  # Vertex AI uses GCP auth, not API key
-                base_url=endpoint_url,
-                timeout=3600,  # Long timeout for large models
-            )
+                credentials, project = google.auth.default()
+                auth_request = google.auth.transport.requests.Request()
+                credentials.refresh(auth_request)
+                access_token = credentials.token
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to get GCP credentials: {e}. "
+                    "Run 'gcloud auth application-default login' to authenticate."
+                )
+
+            # Build request payload using Vertex AI prediction format
+            # See: https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.endpoints/predict
+            predict_payload = {
+                "instances": [
+                    {
+                        "@requestFormat": "chatCompletions",
+                        "messages": qwen3_messages,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                    }
+                ]
+            }
+
+            # For dedicated Vertex AI Model Garden endpoints, the URL format is:
+            # https://{endpoint_id}.{location}-{project_number}.prediction.vertexai.goog/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict
+            #
+            # The endpoint URL env var should contain the full predict URL, or we construct it
+            # Expected format in env: https://mg-endpoint-xxx.us-central1-12345.prediction.vertexai.goog
+            import re
+            base_url = endpoint_url.rstrip('/')
+            if base_url.endswith('/v1'):
+                base_url = base_url[:-3]
+
+            # Parse the endpoint DNS to extract components
+            # Format: {endpoint_id}.{location}-{project_number}.prediction.vertexai.goog
+            # Example: mg-endpoint-xxx.us-central1-750082808015.prediction.vertexai.goog
+            # Note: location can contain hyphens (e.g., us-central1), so we match until the last hyphen before project_number
+            dns_match = re.match(r'https://([^.]+)\.(.+)-(\d+)\.prediction\.vertexai\.goog', base_url)
+            if dns_match:
+                endpoint_id = dns_match.group(1)
+                location = dns_match.group(2)
+                project_number = dns_match.group(3)
+                # We need the project ID, not number - try to get from env or use number
+                project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", f"projects/{project_number}")
+                predict_url = f"{base_url}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
+            else:
+                # Fallback: assume the URL is already complete or use simple format
+                predict_url = f"{base_url}:predict"
+
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
 
             try:
-                logger.info("Generating content with Qwen3-VL model: %s", vertex_model)
-                response = client.chat.completions.create(
-                    model=vertex_model,
-                    messages=qwen3_messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
+                logger.info("Generating content with Qwen3-VL model: %s at %s", vertex_model, predict_url)
+                response = requests.post(
+                    predict_url,
+                    headers=headers,
+                    json=predict_payload,
+                    timeout=3600,
                 )
-                return response.choices[0].message.content
+
+                if response.status_code != 200:
+                    logger.error("Qwen3-VL API error %d: %s", response.status_code, response.text)
+                    return ""
+
+                result = response.json()
+                # Parse the response - format may vary
+                logger.debug("Qwen3-VL response: %s", result)
+
+                # Try to extract content from various response formats
+                if "predictions" in result:
+                    predictions = result["predictions"]
+                    # predictions can be a dict (single response) or list
+                    if isinstance(predictions, dict):
+                        # OpenAI-compatible format with choices
+                        if "choices" in predictions:
+                            return predictions["choices"][0]["message"]["content"]
+                        # Direct content
+                        elif "content" in predictions:
+                            return predictions["content"]
+                    elif isinstance(predictions, list):
+                        prediction = predictions[0]
+                        if isinstance(prediction, str):
+                            return prediction
+                        elif isinstance(prediction, dict):
+                            if "choices" in prediction:
+                                return prediction["choices"][0]["message"]["content"]
+                            elif "content" in prediction:
+                                return prediction["content"]
+                            elif "message" in prediction:
+                                return prediction["message"].get("content", str(prediction))
+                        return str(prediction)
+                    return str(predictions)
+                else:
+                    logger.error("Unexpected response format: %s", result)
+                    return ""
+
             except Exception as e:
                 logger.error("Qwen3-VL API call failed: %s", str(e))
                 return ""

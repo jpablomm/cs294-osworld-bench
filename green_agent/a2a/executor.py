@@ -62,6 +62,9 @@ from green_agent.config import (
     EVAL_STABILIZATION_WAIT,
 )
 
+# Import VM pool configuration
+from green_agent.a2a.pool_config import VM_POOL_ENABLED, get_pool_config
+
 # Import ActionTracker for loop detection
 try:
     from green_agent.action_tracker import ActionTracker
@@ -125,9 +128,10 @@ class GreenAgentExecutor(AgentExecutor):
     def __init__(self):
         """Initialize the executor with lazy-loaded managers."""
         self._vm_manager = None
+        self._vm_pool = None  # VM pool for snapshot-based reuse
         self._task_executor = None
         self.active_assessments: Dict[str, Dict[str, Any]] = {}
-        logger.info("GreenAgentExecutor initialized")
+        logger.info(f"GreenAgentExecutor initialized (pool_enabled={VM_POOL_ENABLED})")
 
     def _get_vm_manager(self):
         """Lazily initialize VMManager on first use."""
@@ -136,6 +140,27 @@ class GreenAgentExecutor(AgentExecutor):
             logger.info(f"Initializing VMManager with project_id: {GCP_PROJECT}")
             self._vm_manager = VMManager(project_id=GCP_PROJECT)
         return self._vm_manager
+
+    async def _get_vm_pool(self):
+        """Lazily initialize VMPoolManager on first use (async)."""
+        if self._vm_pool is None:
+            from green_agent.a2a.vm_pool import VMPoolManager
+            config = get_pool_config()
+            logger.info(f"Initializing VMPoolManager with config: {config}")
+            self._vm_pool = VMPoolManager(
+                project_id=GCP_PROJECT,
+                zone=config["zone"],
+                pool_size=config["pool_size"],
+                snapshot_name=config["snapshot_name"],
+                machine_type=config["machine_type"],
+                max_tasks_per_vm=config["max_tasks_per_vm"],
+                max_consecutive_failures=config["max_consecutive_failures"],
+                restore_timeout=config["restore_timeout"],
+                ready_timeout=config["ready_timeout"],
+                fallback_to_fresh=config["fallback_to_fresh"],
+            )
+            await self._vm_pool.initialize()
+        return self._vm_pool
 
     def _get_task_executor(self):
         """Lazily initialize TaskExecutor on first use."""
@@ -361,50 +386,87 @@ class GreenAgentExecutor(AgentExecutor):
         }
 
         vm_info = None
+        pooled_vm = None  # Track pooled VM for release
         callback_url = config.get("callback_url")
 
         try:
-            # Step 1: Create VM
-            logger.info("Creating VM...")
-            await self._send_progress(event_queue, context_id, assessment_id, {
-                "type": "vm_creation_started",
-                "vm_image": config.get("vm_image", "osworld-golden-v12-gnome")
-            }, callback_url)
+            # Step 1: Get VM (from pool or create fresh)
+            if VM_POOL_ENABLED:
+                # Use VM pool with snapshot-based reset
+                logger.info("Acquiring VM from pool...")
+                await self._send_progress(event_queue, context_id, assessment_id, {
+                    "type": "vm_pool_acquiring",
+                    "message": "Acquiring VM from pool..."
+                }, callback_url)
 
-            vm_info = await asyncio.to_thread(
-                self._get_vm_manager().create_vm,
-                assessment_id
-            )
-            logger.info(f"VM created: {vm_info['vm_name']} at {vm_info['vm_ip']}")
+                pool = await self._get_vm_pool()
+                pooled_vm = await pool.acquire_vm(assessment_id)
+
+                vm_info = {
+                    "vm_name": pooled_vm.vm_name,
+                    "vm_ip": pooled_vm.vm_ip,
+                    "pool_vm_id": pooled_vm.vm_id,
+                    "from_pool": True,
+                    "tasks_completed": pooled_vm.tasks_completed,
+                }
+                logger.info(f"Acquired VM from pool: {vm_info['vm_name']} at {vm_info['vm_ip']}")
+
+                await self._send_progress(event_queue, context_id, assessment_id, {
+                    "type": "vm_acquired_from_pool",
+                    "vm_name": vm_info['vm_name'],
+                    "vm_ip": vm_info['vm_ip'],
+                    "tasks_completed": pooled_vm.tasks_completed,
+                }, callback_url)
+
+                # Pool VM is already ready, skip wait
+                await self._send_progress(event_queue, context_id, assessment_id, {
+                    "type": "vm_ready",
+                    "vm_ip": vm_info["vm_ip"],
+                    "from_pool": True,
+                }, callback_url)
+            else:
+                # Original behavior: create fresh VM
+                logger.info("Creating VM...")
+                await self._send_progress(event_queue, context_id, assessment_id, {
+                    "type": "vm_creation_started",
+                    "vm_image": config.get("vm_image", "osworld-golden-v12-gnome")
+                }, callback_url)
+
+                vm_info = await asyncio.to_thread(
+                    self._get_vm_manager().create_vm,
+                    assessment_id
+                )
+                vm_info["from_pool"] = False
+                logger.info(f"VM created: {vm_info['vm_name']} at {vm_info['vm_ip']}")
+
+                await self._send_progress(event_queue, context_id, assessment_id, {
+                    "type": "vm_created",
+                    "vm_name": vm_info['vm_name'],
+                    "vm_ip": vm_info['vm_ip']
+                }, callback_url)
+
+                # Step 2: Wait for VM ready (only for fresh VMs)
+                logger.info("Waiting for VM to be ready...")
+                await self._send_progress(event_queue, context_id, assessment_id, {
+                    "type": "vm_waiting",
+                    "message": "Waiting for VM to boot and OSWorld server to start"
+                }, callback_url)
+
+                vm_ready = await asyncio.to_thread(
+                    self._get_vm_manager().wait_for_vm_ready,
+                    vm_info["vm_ip"],
+                    timeout=600
+                )
+
+                if not vm_ready:
+                    raise TimeoutError(f"VM {vm_info['vm_ip']} failed to become ready")
+
+                await self._send_progress(event_queue, context_id, assessment_id, {
+                    "type": "vm_ready",
+                    "vm_ip": vm_info["vm_ip"]
+                }, callback_url)
 
             self.active_assessments[assessment_id]["vm_info"] = vm_info
-
-            await self._send_progress(event_queue, context_id, assessment_id, {
-                "type": "vm_created",
-                "vm_name": vm_info['vm_name'],
-                "vm_ip": vm_info['vm_ip']
-            }, callback_url)
-
-            # Step 2: Wait for VM ready
-            logger.info("Waiting for VM to be ready...")
-            await self._send_progress(event_queue, context_id, assessment_id, {
-                "type": "vm_waiting",
-                "message": "Waiting for VM to boot and OSWorld server to start"
-            }, callback_url)
-
-            vm_ready = await asyncio.to_thread(
-                self._get_vm_manager().wait_for_vm_ready,
-                vm_info["vm_ip"],
-                timeout=600
-            )
-
-            if not vm_ready:
-                raise TimeoutError(f"VM {vm_info['vm_ip']} failed to become ready")
-
-            await self._send_progress(event_queue, context_id, assessment_id, {
-                "type": "vm_ready",
-                "vm_ip": vm_info["vm_ip"]
-            }, callback_url)
 
             # Step 3: Execute OSWorld task setup
             osworld_task = config.get("osworld_task")
@@ -556,12 +618,23 @@ class GreenAgentExecutor(AgentExecutor):
                 "message": f"Assessment {'completed successfully' if result.get('success') == 1 else 'failed'}"
             })
 
-            # Cleanup VM
+            # Cleanup VM (release to pool or delete)
             logger.info("Cleaning up VM...")
-            await asyncio.to_thread(
-                self._get_vm_manager().delete_vm,
-                assessment_id
-            )
+            if VM_POOL_ENABLED and pooled_vm:
+                # Release VM back to pool for snapshot restore
+                pool = await self._get_vm_pool()
+                await pool.release_vm(pooled_vm.vm_id, success=True)
+                await _push_event_to_webui(callback_url, {
+                    "type": "vm_released_to_pool",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "vm_id": pooled_vm.vm_id,
+                })
+            else:
+                # Delete VM (original behavior)
+                await asyncio.to_thread(
+                    self._get_vm_manager().delete_vm,
+                    assessment_id
+                )
 
             # Push assessment completed to WebUI
             await _push_event_to_webui(callback_url, {
@@ -580,8 +653,14 @@ class GreenAgentExecutor(AgentExecutor):
             # Classify the error based on context
             error_type = classify_error(e, context="assessment")
 
-            # Cleanup VM on failure
-            if vm_info:
+            # Cleanup VM on failure (release to pool or delete)
+            if VM_POOL_ENABLED and pooled_vm:
+                try:
+                    pool = await self._get_vm_pool()
+                    await pool.release_vm(pooled_vm.vm_id, success=False)
+                except Exception as cleanup_error:
+                    logger.error(f"Pool release failed: {cleanup_error}")
+            elif vm_info:
                 try:
                     await asyncio.to_thread(
                         self._get_vm_manager().delete_vm,
@@ -723,6 +802,24 @@ class GreenAgentExecutor(AgentExecutor):
 
     def cleanup_all_vms(self):
         """Cleanup all running VMs (for graceful shutdown)."""
+        # If pool is enabled and initialized, shut it down
+        if VM_POOL_ENABLED and self._vm_pool is not None:
+            logger.info("Shutting down VM pool...")
+            try:
+                # Run async shutdown in event loop
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule shutdown as task if loop is running
+                    asyncio.create_task(self._vm_pool.shutdown())
+                else:
+                    loop.run_until_complete(self._vm_pool.shutdown())
+                logger.info("VM pool shutdown complete")
+            except Exception as e:
+                logger.error(f"Failed to shutdown VM pool: {e}")
+            return  # Pool handles its own VMs
+
+        # Original cleanup for non-pool VMs
         running = [
             (aid, data) for aid, data in self.active_assessments.items()
             if data.get("status") == "running"
@@ -740,3 +837,9 @@ class GreenAgentExecutor(AgentExecutor):
                 logger.info(f"VM for {assessment_id} deleted")
             except Exception as e:
                 logger.error(f"Failed to cleanup VM for {assessment_id}: {e}")
+
+    async def shutdown_pool(self):
+        """Async method to shutdown the VM pool gracefully."""
+        if self._vm_pool is not None:
+            await self._vm_pool.shutdown()
+            self._vm_pool = None

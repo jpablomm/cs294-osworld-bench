@@ -55,6 +55,9 @@ from green_agent.config import (
     get_agent_url,
 )
 
+# Import VM pool configuration
+from green_agent.a2a.pool_config import VM_POOL_ENABLED, get_pool_config
+
 # Import ActionTracker for loop detection
 try:
     from green_agent.action_tracker import ActionTracker
@@ -138,6 +141,7 @@ app = FastAPI(
 # Lazy initialization of managers to avoid blocking subprocess startup
 # GCP API calls and Supabase clients can hang during import in Cloud Run subprocesses
 _vm_manager = None
+_vm_pool = None  # VM pool for snapshot-based reuse
 _task_executor = None
 
 def get_vm_manager():
@@ -149,6 +153,28 @@ def get_vm_manager():
         _vm_manager = VMManager(project_id=GCP_PROJECT)
         logger.info(f"VMManager initialized with project_id: {_vm_manager.project_id}")
     return _vm_manager
+
+async def get_vm_pool():
+    """Lazily initialize VMPoolManager on first use (async)"""
+    global _vm_pool
+    if _vm_pool is None:
+        from .vm_pool import VMPoolManager
+        config = get_pool_config()
+        logger.info(f"Initializing VMPoolManager with config: {config}")
+        _vm_pool = VMPoolManager(
+            project_id=GCP_PROJECT,
+            zone=config["zone"],
+            pool_size=config["pool_size"],
+            snapshot_name=config["snapshot_name"],
+            machine_type=config["machine_type"],
+            max_tasks_per_vm=config["max_tasks_per_vm"],
+            max_consecutive_failures=config["max_consecutive_failures"],
+            restore_timeout=config["restore_timeout"],
+            ready_timeout=config["ready_timeout"],
+            fallback_to_fresh=config["fallback_to_fresh"],
+        )
+        await _vm_pool.initialize()
+    return _vm_pool
 
 def get_task_executor():
     """Lazily initialize TaskExecutor on first use"""
@@ -177,12 +203,28 @@ def _cleanup_all_vms():
     This prevents orphaned VMs which waste cloud resources.
     Called by signal handlers and atexit.
     """
-    global _is_shutting_down
+    global _is_shutting_down, _vm_pool
 
     if _is_shutting_down:
         return  # Already cleaning up
     _is_shutting_down = True
 
+    # If pool is enabled and initialized, shut it down
+    if VM_POOL_ENABLED and _vm_pool is not None:
+        logger.info("Shutting down VM pool...")
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(_vm_pool.shutdown())
+            else:
+                loop.run_until_complete(_vm_pool.shutdown())
+            logger.info("VM pool shutdown complete")
+        except Exception as e:
+            logger.error(f"Failed to shutdown VM pool: {e}")
+        return  # Pool handles its own VMs
+
+    # Original cleanup for non-pool VMs
     running_assessments = [
         (aid, data) for aid, data in active_assessments.items()
         if data.get("status") == "running"
@@ -580,56 +622,93 @@ async def _execute_assessment(
     }
 
     vm_info = None
+    pooled_vm = None  # Track pooled VM for release
     callback_url = config.get("callback_url")
 
     try:
-        # Step 1: Create VM (reuse existing VMManager)
-        logger.info("Creating VM...")
+        # Step 1: Get VM (from pool or create fresh)
+        if VM_POOL_ENABLED:
+            # Use VM pool with snapshot-based reset
+            logger.info("Acquiring VM from pool...")
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_pool_acquiring",
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": "Acquiring VM from pool..."
+            })
 
-        # Educational event: VM creation started
-        await _push_event_to_webui(callback_url, {
-            "type": "vm_creation_started",
-            "timestamp": datetime.utcnow().isoformat(),
-            "vm_image": config.get("vm_image", "osworld-golden-v12-gnome")
-        })
+            pool = await get_vm_pool()
+            pooled_vm = await pool.acquire_vm(assessment_id)
 
-        vm_info = await asyncio.to_thread(
-            get_vm_manager().create_vm,
-            assessment_id
-        )
-        logger.info(f"VM created: {vm_info['vm_name']} at {vm_info['vm_ip']}")
+            vm_info = {
+                "vm_name": pooled_vm.vm_name,
+                "vm_ip": pooled_vm.vm_ip,
+                "pool_vm_id": pooled_vm.vm_id,
+                "from_pool": True,
+                "tasks_completed": pooled_vm.tasks_completed,
+            }
+            logger.info(f"Acquired VM from pool: {vm_info['vm_name']} at {vm_info['vm_ip']}")
 
-        # Educational event: VM creation completed
-        await _push_event_to_webui(callback_url, {
-            "type": "vm_created",
-            "timestamp": datetime.utcnow().isoformat(),
-            "vm_name": vm_info['vm_name'],
-            "vm_ip": vm_info['vm_ip']
-        })
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_acquired_from_pool",
+                "timestamp": datetime.utcnow().isoformat(),
+                "vm_name": vm_info['vm_name'],
+                "vm_ip": vm_info['vm_ip'],
+                "tasks_completed": pooled_vm.tasks_completed,
+            })
 
-        # Step 2: Wait for VM ready
-        logger.info("Waiting for VM to be ready (timeout: 600s)...")
+            # Pool VM is already ready
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_ready",
+                "timestamp": datetime.utcnow().isoformat(),
+                "vm_ip": vm_info["vm_ip"],
+                "from_pool": True,
+                "message": "VM acquired from pool and ready"
+            })
+        else:
+            # Original behavior: create fresh VM
+            logger.info("Creating VM...")
 
-        # Educational event: Waiting for VM
-        await _push_event_to_webui(callback_url, {
-            "type": "vm_waiting",
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": "Waiting for VM to boot and OSWorld server to start (up to 10 minutes)"
-        })
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_creation_started",
+                "timestamp": datetime.utcnow().isoformat(),
+                "vm_image": config.get("vm_image", "osworld-golden-v12-gnome")
+            })
 
-        vm_ready = await asyncio.to_thread(
-            get_vm_manager().wait_for_vm_ready,
-            vm_info["vm_ip"],
-            timeout=600  # Increased to 600 seconds (10 minutes) for slower VM startups
-        )
+            vm_info = await asyncio.to_thread(
+                get_vm_manager().create_vm,
+                assessment_id
+            )
+            vm_info["from_pool"] = False
+            logger.info(f"VM created: {vm_info['vm_name']} at {vm_info['vm_ip']}")
 
-        if not vm_ready:
-            logger.error(f"VM {vm_info['vm_ip']} did not become ready within 600 seconds")
-            logger.info(f"Will cleanup VM {assessment_id} due to timeout")
-            raise TimeoutError(f"VM {vm_info['vm_ip']} failed to become ready within 600 seconds (timeout)")
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_created",
+                "timestamp": datetime.utcnow().isoformat(),
+                "vm_name": vm_info['vm_name'],
+                "vm_ip": vm_info['vm_ip']
+            })
 
-        # Educational event: VM ready
-        await _push_event_to_webui(callback_url, {
+            # Step 2: Wait for VM ready (only for fresh VMs)
+            logger.info("Waiting for VM to be ready (timeout: 600s)...")
+
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_waiting",
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": "Waiting for VM to boot and OSWorld server to start (up to 10 minutes)"
+            })
+
+            vm_ready = await asyncio.to_thread(
+                get_vm_manager().wait_for_vm_ready,
+                vm_info["vm_ip"],
+                timeout=600
+            )
+
+            if not vm_ready:
+                logger.error(f"VM {vm_info['vm_ip']} did not become ready within 600 seconds")
+                logger.info(f"Will cleanup VM {assessment_id} due to timeout")
+                raise TimeoutError(f"VM {vm_info['vm_ip']} failed to become ready within 600 seconds (timeout)")
+
+            await _push_event_to_webui(callback_url, {
             "type": "vm_ready",
             "timestamp": datetime.utcnow().isoformat(),
             "vm_ip": vm_info["vm_ip"],
@@ -936,20 +1015,37 @@ async def _execute_assessment(
             "message": f"Assessment {'completed successfully' if result.get('success') == 1 else 'failed'}"
         })
 
-        # Step 5: Cleanup VM
+        # Step 5: Cleanup VM (release to pool or delete)
         logger.info("Cleaning up VM...")
 
-        # Educational event: VM cleanup started
-        await _push_event_to_webui(callback_url, {
-            "type": "vm_cleanup_started",
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": "Deleting VM and cleaning up resources"
-        })
+        if VM_POOL_ENABLED and pooled_vm:
+            # Release VM back to pool for snapshot restore
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_releasing_to_pool",
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": "Releasing VM back to pool for restore"
+            })
 
-        await asyncio.to_thread(
-            get_vm_manager().delete_vm,
-            assessment_id
-        )
+            pool = await get_vm_pool()
+            await pool.release_vm(pooled_vm.vm_id, success=True)
+
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_released_to_pool",
+                "timestamp": datetime.utcnow().isoformat(),
+                "vm_id": pooled_vm.vm_id,
+            })
+        else:
+            # Delete VM (original behavior)
+            await _push_event_to_webui(callback_url, {
+                "type": "vm_cleanup_started",
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": "Deleting VM and cleaning up resources"
+            })
+
+            await asyncio.to_thread(
+                get_vm_manager().delete_vm,
+                assessment_id
+            )
 
         # Educational event: Assessment completed
         await _push_event_to_webui(callback_url, {
@@ -966,8 +1062,16 @@ async def _execute_assessment(
         error_type = type(e).__name__
         logger.error(f"Assessment failed ({error_type}): {e}", exc_info=True)
 
-        # Cleanup VM on failure (including timeouts)
-        if vm_info:
+        # Cleanup VM on failure (release to pool or delete)
+        if VM_POOL_ENABLED and pooled_vm:
+            try:
+                logger.info(f"Releasing VM {pooled_vm.vm_id} to pool due to failure...")
+                pool = await get_vm_pool()
+                await pool.release_vm(pooled_vm.vm_id, success=False)
+                logger.info(f"VM {pooled_vm.vm_id} released to pool")
+            except Exception as cleanup_error:
+                logger.error(f"Pool release failed for {pooled_vm.vm_id}: {cleanup_error}", exc_info=True)
+        elif vm_info:
             try:
                 logger.info(f"Cleaning up VM {vm_info['vm_name']} ({assessment_id}) due to failure...")
                 await asyncio.to_thread(

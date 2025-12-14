@@ -33,6 +33,23 @@ EVAL_STABILIZATION_WAIT = int(os.environ.get("EVAL_STABILIZATION_WAIT", "10"))
 CLOUDRUN_HOST = os.environ.get("CLOUDRUN_HOST")
 HTTPS_ENABLED = os.environ.get("HTTPS_ENABLED", "").lower() in ("true", "1", "yes")
 
+# VM Pool Configuration (for snapshot-based VM reuse)
+# Re-exported from pool_config for convenience
+from green_agent.a2a.pool_config import (
+    VM_POOL_ENABLED,
+    VM_POOL_SIZE,
+    VM_POOL_SNAPSHOT_NAME,
+    VM_POOL_ZONE,
+    VM_POOL_MACHINE_TYPE,
+    VM_POOL_MAX_TASKS_PER_VM,
+    VM_POOL_MAX_CONSECUTIVE_FAILURES,
+    VM_POOL_RESTORE_TIMEOUT,
+    VM_POOL_ACQUIRE_TIMEOUT,
+    VM_POOL_READY_TIMEOUT,
+    VM_POOL_FALLBACK_TO_FRESH,
+    get_pool_config,
+)
+
 
 def get_agent_url() -> str:
     """Build the Green Agent URL from environment or defaults."""
