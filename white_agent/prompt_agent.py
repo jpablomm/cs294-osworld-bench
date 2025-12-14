@@ -168,6 +168,76 @@ def save_to_tmp_img_file(data_str):
     return tmp_img_path
 
 
+def scale_qwen_coordinates(response: str, screen_width: int = 1920, screen_height: int = 1080) -> str:
+    """
+    Scale Qwen VL model coordinates from 0-999 normalized space to actual screen pixels.
+
+    Qwen VL models are trained to output coordinates in a 1000x1000 normalized grid.
+    This function parses pyautogui code and scales x,y values to actual screen resolution.
+
+    Args:
+        response: The raw response from Qwen VL containing pyautogui code
+        screen_width: Actual screen width in pixels (default 1920)
+        screen_height: Actual screen height in pixels (default 1080)
+
+    Returns:
+        Response with coordinates scaled to actual screen resolution
+    """
+    if not response:
+        return response
+
+    # Scale factor from 0-999 grid to actual screen
+    x_scale = screen_width / 999.0
+    y_scale = screen_height / 999.0
+
+    def scale_coordinate_pair(match):
+        """Scale a single x=N, y=N or (x, y) coordinate pair."""
+        full_match = match.group(0)
+
+        # Try to extract x and y values
+        x_match = re.search(r'x\s*=\s*(\d+(?:\.\d+)?)', full_match)
+        y_match = re.search(r'y\s*=\s*(\d+(?:\.\d+)?)', full_match)
+
+        if x_match and y_match:
+            x_val = float(x_match.group(1))
+            y_val = float(y_match.group(1))
+
+            # Scale coordinates
+            new_x = int(round(x_val * x_scale))
+            new_y = int(round(y_val * y_scale))
+
+            # Replace in the match
+            result = full_match
+            result = re.sub(r'x\s*=\s*\d+(?:\.\d+)?', f'x={new_x}', result)
+            result = re.sub(r'y\s*=\s*\d+(?:\.\d+)?', f'y={new_y}', result)
+            return result
+
+        return full_match
+
+    # Match pyautogui function calls that have x= and y= parameters
+    # e.g., pyautogui.click(x=17, y=134), pyautogui.rightClick(x=100, y=380)
+    pattern = r'pyautogui\.\w+\([^)]*x\s*=\s*\d+[^)]*y\s*=\s*\d+[^)]*\)'
+    scaled_response = re.sub(pattern, scale_coordinate_pair, response)
+
+    # Also handle positional arguments: pyautogui.click(17, 134)
+    def scale_positional_args(match):
+        func_name = match.group(1)
+        x_val = float(match.group(2))
+        y_val = float(match.group(3))
+        rest = match.group(4) if match.group(4) else ""
+
+        new_x = int(round(x_val * x_scale))
+        new_y = int(round(y_val * y_scale))
+
+        return f'pyautogui.{func_name}({new_x}, {new_y}{rest})'
+
+    # Match pyautogui.func(x, y) or pyautogui.func(x, y, ...)
+    pos_pattern = r'pyautogui\.(\w+)\((\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)((?:\s*,\s*[^)]+)?)\)'
+    scaled_response = re.sub(pos_pattern, scale_positional_args, scaled_response)
+
+    return scaled_response
+
+
 def linearize_accessibility_tree(accessibility_tree, platform="ubuntu"):
 
     if platform == "ubuntu":
@@ -1351,32 +1421,46 @@ class PromptAgent:
                 logger.debug("Qwen3-VL response: %s", result)
 
                 # Try to extract content from various response formats
+                content = None
                 if "predictions" in result:
                     predictions = result["predictions"]
                     # predictions can be a dict (single response) or list
                     if isinstance(predictions, dict):
                         # OpenAI-compatible format with choices
                         if "choices" in predictions:
-                            return predictions["choices"][0]["message"]["content"]
+                            content = predictions["choices"][0]["message"]["content"]
                         # Direct content
                         elif "content" in predictions:
-                            return predictions["content"]
+                            content = predictions["content"]
                     elif isinstance(predictions, list):
                         prediction = predictions[0]
                         if isinstance(prediction, str):
-                            return prediction
+                            content = prediction
                         elif isinstance(prediction, dict):
                             if "choices" in prediction:
-                                return prediction["choices"][0]["message"]["content"]
+                                content = prediction["choices"][0]["message"]["content"]
                             elif "content" in prediction:
-                                return prediction["content"]
+                                content = prediction["content"]
                             elif "message" in prediction:
-                                return prediction["message"].get("content", str(prediction))
-                        return str(prediction)
-                    return str(predictions)
+                                content = prediction["message"].get("content", str(prediction))
+                            else:
+                                content = str(prediction)
+                        else:
+                            content = str(prediction)
+                    else:
+                        content = str(predictions)
                 else:
                     logger.error("Unexpected response format: %s", result)
                     return ""
+
+                # Scale Qwen3-VL coordinates from 0-999 normalized space to actual screen pixels
+                if content:
+                    original_content = content
+                    content = scale_qwen_coordinates(content)
+                    if content != original_content:
+                        logger.info("Qwen3-VL coordinates scaled: %s -> %s",
+                                    original_content.strip()[:100], content.strip()[:100])
+                return content or ""
 
             except Exception as e:
                 logger.error("Qwen3-VL API call failed: %s", str(e))
@@ -1455,7 +1539,14 @@ class PromptAgent:
 
             try:
                 if self.model in ["qwen-vl-plus", "qwen-vl-max"]:
-                    return response['output']['choices'][0]['message']['content'][0]['text']
+                    content = response['output']['choices'][0]['message']['content'][0]['text']
+                    # Scale Qwen VL coordinates from 0-999 normalized space to actual screen pixels
+                    original_content = content
+                    content = scale_qwen_coordinates(content)
+                    if content != original_content:
+                        logger.info("Qwen VL coordinates scaled: %s -> %s",
+                                    original_content.strip()[:100], content.strip()[:100])
+                    return content
                 else:
                     return response['output']['choices'][0]['message']['content']
 
