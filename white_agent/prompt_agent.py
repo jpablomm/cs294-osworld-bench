@@ -87,6 +87,12 @@ from white_agent.prompts import (
     SYS_PROMPT_IN_BOTH_OUT_CODE,
     SYS_PROMPT_IN_BOTH_OUT_ACTION,
     SYS_PROMPT_IN_SOM_OUT_TAG,
+    QWEN3_VL_SYSTEM_PROMPT,
+)
+from white_agent.qwen_utils import (
+    preprocess_image_for_qwen,
+    parse_qwen_tool_call,
+    scale_qwen_response_coordinates,
 )
 
 logger = logging.getLogger("white_agent.prompt_agent")
@@ -175,6 +181,11 @@ def scale_qwen_coordinates(response: str, screen_width: int = 1920, screen_heigh
     Qwen VL models are trained to output coordinates in a 1000x1000 normalized grid.
     This function parses pyautogui code and scales x,y values to actual screen resolution.
 
+    Handles multiple coordinate formats:
+    - pyautogui.click(x=17, y=134)    # Both keyword args
+    - pyautogui.click(17, 134)         # Both positional args
+    - pyautogui.click(x=17, 134)       # Mixed: x keyword, y positional
+
     Args:
         response: The raw response from Qwen VL containing pyautogui code
         screen_width: Actual screen width in pixels (default 1920)
@@ -190,50 +201,58 @@ def scale_qwen_coordinates(response: str, screen_width: int = 1920, screen_heigh
     x_scale = screen_width / 999.0
     y_scale = screen_height / 999.0
 
-    def scale_coordinate_pair(match):
-        """Scale a single x=N, y=N or (x, y) coordinate pair."""
+    def scale_pyautogui_call(match):
+        """Scale coordinates in a pyautogui function call."""
         full_match = match.group(0)
+        func_name = match.group(1)
+        args_str = match.group(2)
 
-        # Try to extract x and y values
-        x_match = re.search(r'x\s*=\s*(\d+(?:\.\d+)?)', full_match)
-        y_match = re.search(r'y\s*=\s*(\d+(?:\.\d+)?)', full_match)
+        # Try different coordinate patterns:
 
-        if x_match and y_match:
-            x_val = float(x_match.group(1))
-            y_val = float(y_match.group(1))
-
-            # Scale coordinates
+        # Pattern 1: x=N, y=N (both keyword)
+        both_kw = re.search(r'x\s*=\s*(\d+(?:\.\d+)?)\s*,\s*y\s*=\s*(\d+(?:\.\d+)?)', args_str)
+        if both_kw:
+            x_val = float(both_kw.group(1))
+            y_val = float(both_kw.group(2))
             new_x = int(round(x_val * x_scale))
             new_y = int(round(y_val * y_scale))
+            new_args = re.sub(
+                r'x\s*=\s*\d+(?:\.\d+)?\s*,\s*y\s*=\s*\d+(?:\.\d+)?',
+                f'x={new_x}, y={new_y}',
+                args_str
+            )
+            return f'pyautogui.{func_name}({new_args})'
 
-            # Replace in the match
-            result = full_match
-            result = re.sub(r'x\s*=\s*\d+(?:\.\d+)?', f'x={new_x}', result)
-            result = re.sub(r'y\s*=\s*\d+(?:\.\d+)?', f'y={new_y}', result)
-            return result
+        # Pattern 2: x=N, N (x keyword, y positional) - Qwen's mixed format
+        mixed_kw = re.search(r'x\s*=\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)', args_str)
+        if mixed_kw:
+            x_val = float(mixed_kw.group(1))
+            y_val = float(mixed_kw.group(2))
+            new_x = int(round(x_val * x_scale))
+            new_y = int(round(y_val * y_scale))
+            new_args = re.sub(
+                r'x\s*=\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?',
+                f'x={new_x}, y={new_y}',
+                args_str
+            )
+            return f'pyautogui.{func_name}({new_args})'
 
+        # Pattern 3: N, N (both positional) - check it's at start of args
+        pos_match = re.match(r'^(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(.*)', args_str)
+        if pos_match:
+            x_val = float(pos_match.group(1))
+            y_val = float(pos_match.group(2))
+            rest = pos_match.group(3)
+            new_x = int(round(x_val * x_scale))
+            new_y = int(round(y_val * y_scale))
+            return f'pyautogui.{func_name}({new_x}, {new_y}{rest})'
+
+        # No coordinate pattern matched, return unchanged
         return full_match
 
-    # Match pyautogui function calls that have x= and y= parameters
-    # e.g., pyautogui.click(x=17, y=134), pyautogui.rightClick(x=100, y=380)
-    pattern = r'pyautogui\.\w+\([^)]*x\s*=\s*\d+[^)]*y\s*=\s*\d+[^)]*\)'
-    scaled_response = re.sub(pattern, scale_coordinate_pair, response)
-
-    # Also handle positional arguments: pyautogui.click(17, 134)
-    def scale_positional_args(match):
-        func_name = match.group(1)
-        x_val = float(match.group(2))
-        y_val = float(match.group(3))
-        rest = match.group(4) if match.group(4) else ""
-
-        new_x = int(round(x_val * x_scale))
-        new_y = int(round(y_val * y_scale))
-
-        return f'pyautogui.{func_name}({new_x}, {new_y}{rest})'
-
-    # Match pyautogui.func(x, y) or pyautogui.func(x, y, ...)
-    pos_pattern = r'pyautogui\.(\w+)\((\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)((?:\s*,\s*[^)]+)?)\)'
-    scaled_response = re.sub(pos_pattern, scale_positional_args, scaled_response)
+    # Match any pyautogui function call with arguments
+    pattern = r'pyautogui\.(\w+)\(([^)]+)\)'
+    scaled_response = re.sub(pattern, scale_pyautogui_call, response)
 
     return scaled_response
 
@@ -423,6 +442,14 @@ class PromptAgent:
         self.actions = []
         self.observations = []
 
+        # Track if this is a Qwen3-VL model (needs image preprocessing)
+        self.is_qwen3_vl = model.lower().startswith("qwen3-vl") or "qwen3-vl" in model.lower()
+        # Dimension tracking for Qwen3-VL coordinate scaling
+        self._qwen_original_width = None
+        self._qwen_original_height = None
+        self._qwen_processed_width = None
+        self._qwen_processed_height = None
+
         if observation_type == "screenshot":
             if action_space == "computer_13":
                 self.system_message = SYS_PROMPT_IN_SCREENSHOT_OUT_ACTION
@@ -456,6 +483,16 @@ class PromptAgent:
         
         self.system_message = self.system_message.format(CLIENT_PASSWORD=self.client_password)
 
+        # For Qwen3-VL models, use a specialized prompt with actual processed dimensions
+        # - Images are preprocessed with smart_resize for optimal model performance
+        # - Model is told the actual processed dimensions (not normalized 1000x1000)
+        # - Model outputs coordinates in the processed image space
+        # - We scale from processed dimensions to original screen dimensions
+        if self.is_qwen3_vl:
+            logger.info(f"Qwen3-VL model detected: {model} - will use actual processed dimensions")
+            # Store template - will be formatted in predict() when we know the processed dimensions
+            self._qwen_system_template = QWEN3_VL_SYSTEM_PROMPT
+
     def predict(self, instruction: str, obs: Dict) -> List:
         """
         Predict the next action(s) based on the current observation.
@@ -467,7 +504,33 @@ class PromptAgent:
         elif "COORDINATE ANALYSIS" in instruction:
             logger.info("[LoopDetection] Instruction contains coordinate guidance from a11y tree")
 
-        system_message = self.system_message + "\nYou are asked to complete the following task: {}".format(instruction)
+        # For Qwen3-VL, preprocess image to maintain aspect ratio and track dimensions for coordinate scaling
+        # The model is told the actual processed dimensions and outputs coordinates in that space
+        # We scale the model's output coordinates from processed dimensions to original screen dimensions
+        qwen_base64_image = None
+        if self.is_qwen3_vl and self.observation_type in ["screenshot", "screenshot_a11y_tree"]:
+            (
+                qwen_base64_image,
+                self._qwen_original_width,
+                self._qwen_original_height,
+                self._qwen_processed_width,
+                self._qwen_processed_height
+            ) = preprocess_image_for_qwen(obs["screenshot"])
+            logger.info(
+                f"Qwen3-VL image preprocessed: {self._qwen_original_width}x{self._qwen_original_height} -> "
+                f"{self._qwen_processed_width}x{self._qwen_processed_height}"
+            )
+            # Format system message with actual processed dimensions
+            formatted_prompt = self._qwen_system_template.format(
+                CLIENT_PASSWORD=self.client_password,
+                SCREEN_WIDTH=self._qwen_processed_width,
+                SCREEN_HEIGHT=self._qwen_processed_height,
+                SCREEN_WIDTH_MAX=self._qwen_processed_width - 1,
+                SCREEN_HEIGHT_MAX=self._qwen_processed_height - 1,
+            )
+            system_message = formatted_prompt + "\nYou are asked to complete the following task: {}".format(instruction)
+        else:
+            system_message = self.system_message + "\nYou are asked to complete the following task: {}".format(instruction)
 
         # Prepare the payload for the API call
         messages = []
@@ -635,7 +698,11 @@ class PromptAgent:
 
         # {{{1
         if self.observation_type in ["screenshot", "screenshot_a11y_tree"]:
-            base64_image = encode_image(obs["screenshot"])
+            # For Qwen3-VL, use the already-preprocessed image from earlier
+            if self.is_qwen3_vl and qwen_base64_image is not None:
+                base64_image = qwen_base64_image
+            else:
+                base64_image = encode_image(obs["screenshot"])
 
             # Handle accessibility tree - may be missing if green agent doesn't provide it
             linearized_accessibility_tree = None
@@ -645,11 +712,21 @@ class PromptAgent:
                         accessibility_tree=obs["accessibility_tree"],
                         platform=self.platform
                     )
+                    logger.info(f"Linearized accessibility tree: {len(linearized_accessibility_tree)} chars")
+                    # Log first 10 lines and any menu-related items for debugging
+                    lines = linearized_accessibility_tree.split('\n')
+                    logger.info(f"A11Y first 5 lines: {lines[:5]}")
+                    for line in lines:
+                        line_lower = line.lower()
+                        if 'menu' in line_lower or 'remove' in line_lower or 'favorite' in line_lower or 'new window' in line_lower:
+                            logger.info(f"A11Y MENU: {line}")
                 else:
                     logger.warning(
                         "observation_type is 'screenshot_a11y_tree' but no accessibility_tree provided. "
                         "Falling back to screenshot-only mode for this step."
                     )
+            else:
+                logger.info(f"Skipping accessibility tree (observation_type={self.observation_type})")
 
             logger.debug("LINEAR AT: %s", linearized_accessibility_tree)
 
@@ -672,8 +749,10 @@ class PromptAgent:
             if linearized_accessibility_tree:
                 message_text = "Given the screenshot and info from accessibility tree as below:\n{}\nWhat's the next step that you will do to help with the task?".format(
                     linearized_accessibility_tree)
+                logger.info(f"Message includes accessibility tree ({len(linearized_accessibility_tree)} chars)")
             else:
                 message_text = "Given the screenshot as below. What's the next step that you will do to help with the task?"
+                logger.info("Message does NOT include accessibility tree")
 
             messages.append({
                 "role": "user",
@@ -1453,13 +1532,98 @@ class PromptAgent:
                     logger.error("Unexpected response format: %s", result)
                     return ""
 
-                # Scale Qwen3-VL coordinates from 0-999 normalized space to actual screen pixels
-                if content:
+                # Scale Qwen3-VL coordinates from processed image dimensions to original screen
+                # The model outputs coordinates in the processed image space (e.g., 1920x1088)
+                # We need to scale to the original screen dimensions (e.g., 1920x1080)
+                # Model can output pyautogui format OR JSON format
+                if content and self._qwen_original_width and self._qwen_original_height:
                     original_content = content
-                    content = scale_qwen_coordinates(content)
-                    if content != original_content:
-                        logger.info("Qwen3-VL coordinates scaled: %s -> %s",
-                                    original_content.strip()[:100], content.strip()[:100])
+                    scaled = False
+
+                    if 'pyautogui.' in content:
+                        # With accessibility tree, model should output actual screen coordinates
+                        # Only scale if coordinates exceed screen bounds (processed image space)
+                        # Parse to check if scaling is needed
+                        import re
+                        coord_match = re.search(r'pyautogui\.\w+\((\d+),\s*(\d+)', content)
+                        if coord_match:
+                            x_val = int(coord_match.group(1))
+                            y_val = int(coord_match.group(2))
+                            if x_val > self._qwen_original_width or y_val > self._qwen_original_height:
+                                # Coordinates exceed screen, scale from processed to original
+                                content = scale_qwen_response_coordinates(
+                                    content,
+                                    original_width=self._qwen_original_width,
+                                    original_height=self._qwen_original_height,
+                                    processed_width=self._qwen_processed_width,
+                                    processed_height=self._qwen_processed_height,
+                                )
+                                logger.info(f"Scaled pyautogui coords (exceeded screen bounds)")
+                            else:
+                                logger.info(f"Pyautogui coords in screen space: ({x_val}, {y_val})")
+                        scaled = (content != original_content)
+
+                    elif '"op"' in content:
+                        # Handle JSON format - scale coordinates in JSON
+                        # Model outputs: {"op": "right_click", "args": {"x": [14, 124]}}
+                        # or: {"op": "click", "args": {"x": 14, "y": 124}}
+                        # NOTE: Qwen often ignores our screen dimensions and outputs in 0-999 space
+                        try:
+                            # Extract JSON from markdown code block if present
+                            json_match = re.search(r'```(?:json)?\s*\n?({.*?})\s*```', content, re.DOTALL)
+                            if json_match:
+                                json_str = json_match.group(1)
+                            elif content.strip().startswith('{'):
+                                json_str = content.strip()
+                            else:
+                                json_str = None
+
+                            if json_str:
+                                action_dict = json.loads(json_str)
+                                args = action_dict.get("args", {})
+                                x_val, y_val = None, None
+
+                                # Handle array format: {"x": [14, 124]}
+                                if "x" in args and isinstance(args["x"], list):
+                                    coords = args["x"]
+                                    if len(coords) >= 2:
+                                        x_val, y_val = coords[0], coords[1]
+                                # Handle separate x, y format
+                                elif "x" in args and "y" in args:
+                                    x_val, y_val = args["x"], args["y"]
+
+                                if x_val is not None and y_val is not None:
+                                    # Check if coordinates look reasonable for screen space
+                                    # If they're within screen bounds (or close), use as-is
+                                    # The accessibility tree provides ACTUAL screen coordinates
+                                    if x_val <= self._qwen_original_width and y_val <= self._qwen_original_height:
+                                        # Coordinates are in actual screen space (likely from accessibility tree)
+                                        new_x = int(round(x_val))
+                                        new_y = int(round(y_val))
+                                        logger.info(f"Qwen JSON coords in screen space: ({x_val}, {y_val}) -> ({new_x}, {new_y})")
+                                    else:
+                                        # Coordinates exceed screen bounds - scale from processed to original
+                                        x_scale = self._qwen_original_width / self._qwen_processed_width
+                                        y_scale = self._qwen_original_height / self._qwen_processed_height
+                                        new_x = int(round(x_val * x_scale))
+                                        new_y = int(round(y_val * y_scale))
+                                        logger.info(f"Qwen JSON coords scaled: ({x_val}, {y_val}) -> ({new_x}, {new_y})")
+
+                                    action_dict["args"] = {"x": new_x, "y": new_y}
+                                    content = json.dumps(action_dict)
+                                    scaled = True
+                        except (json.JSONDecodeError, KeyError, TypeError) as e:
+                            logger.warning(f"Failed to parse JSON for scaling: {e}")
+
+                    if scaled:
+                        logger.info(
+                            "Qwen3-VL coordinates scaled (%dx%d -> %dx%d): %s -> %s",
+                            self._qwen_processed_width, self._qwen_processed_height,
+                            self._qwen_original_width, self._qwen_original_height,
+                            original_content.strip()[:80], content.strip()[:80]
+                        )
+                    else:
+                        logger.info("Qwen3-VL response: %s", content.strip()[:100])
                 return content or ""
 
             except Exception as e:

@@ -266,7 +266,7 @@ def create_app():
             # Use model from request if provided, otherwise use default
             request_model = body.get("model", MODEL)
 
-            logger.info(f"[/decide] Frame {frame_id}: Processing with {len(trajectory)} history steps, model={request_model}")
+            logger.info(f"[/decide] Frame {frame_id}: Processing with {len(trajectory)} history steps, model={request_model}, a11y_tree={'yes' if accessibility_tree else 'no'} ({len(accessibility_tree) if accessibility_tree else 0} chars)")
 
             # Create fresh agent for this request (stateless)
             agent = PromptAgent(

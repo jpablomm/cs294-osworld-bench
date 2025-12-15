@@ -75,16 +75,22 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
     actions_str = actions_str.strip()
 
     # Strip markdown code blocks (```json ... ``` or ```python ... ```)
-    if actions_str.startswith('```'):
-        # Remove opening fence (```json, ```python, or just ```)
-        lines = actions_str.split('\n')
-        if lines[0].startswith('```'):
-            lines = lines[1:]  # Remove first line with ```
-        if lines and lines[-1].strip() == '```':
-            lines = lines[:-1]  # Remove last line with ```
-        actions_str = '\n'.join(lines).strip()
+    # First, extract only the FIRST code block if multiple exist
+    if '```' in actions_str:
+        # Find the first code block
+        code_block_match = re.search(r'```(?:python|json)?\s*\n?(.*?)```', actions_str, re.DOTALL)
+        if code_block_match:
+            actions_str = code_block_match.group(1).strip()
+        elif actions_str.startswith('```'):
+            # Fallback: Remove opening fence (```json, ```python, or just ```)
+            lines = actions_str.split('\n')
+            if lines[0].startswith('```'):
+                lines = lines[1:]  # Remove first line with ```
+            if lines and lines[-1].strip() == '```':
+                lines = lines[:-1]  # Remove last line with ```
+            actions_str = '\n'.join(lines).strip()
 
-    # Check for JSON format (GPT-4o sometimes returns this)
+    # Check for JSON format (GPT-4o and Qwen sometimes return this)
     if actions_str.startswith('{') and actions_str.endswith('}'):
         try:
             action_dict = json.loads(actions_str)
@@ -93,15 +99,22 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
                 if action_dict["op"] == "screenshot":
                     logger.info("Model requested screenshot - converting to wait")
                     return {"op": "wait", "args": {"duration": 0.5}}
+
+                # Handle Qwen format where coordinates are packed as array in "x" field
+                # e.g., {"op": "right_click", "args": {"x": [14, 124]}}
+                args = action_dict.get("args", {})
+                if "x" in args and isinstance(args["x"], list) and len(args["x"]) >= 2:
+                    # Extract x, y from the array
+                    coords = args["x"]
+                    action_dict["args"] = {"x": coords[0], "y": coords[1]}
+                    logger.info(f"Extracted coordinates from array: x={coords[0]}, y={coords[1]}")
+
                 return action_dict
         except json.JSONDecodeError:
             pass
 
-    # Check for DONE/FAIL
-    if "DONE" in actions_str or "FAIL" in actions_str:
-        return {"op": "done", "args": {}}
-
-    # Extract first command from multi-line code blocks
+    # Extract first command from multi-line code blocks BEFORE checking for DONE/FAIL
+    # This prevents false positives from verbose model responses
     if '\n' in actions_str or 'import' in actions_str:
         lines = actions_str.split('\n')
         for line in lines:
@@ -114,8 +127,21 @@ def parse_actions(actions_str: str) -> Dict[str, Any]:
                 actions_str = line
                 break
         else:
+            # No pyautogui command found - NOW check for standalone DONE/FAIL
+            actions_str_upper = actions_str.upper()
+            if actions_str_upper.strip() in ['DONE', 'FAIL'] or \
+               actions_str_upper.strip().startswith('DONE') or \
+               actions_str_upper.strip().startswith('FAIL'):
+                return {"op": "done", "args": {}}
             logger.warning("No command found in code block, defaulting to wait")
             return {"op": "wait", "args": {"duration": 1.0}}
+
+    # Check for standalone DONE/FAIL (only for simple single-line responses)
+    actions_str_upper = actions_str.upper().strip()
+    if actions_str_upper in ['DONE', 'FAIL', 'WAIT']:
+        if actions_str_upper == 'WAIT':
+            return {"op": "wait", "args": {"duration": 1.0}}
+        return {"op": "done", "args": {}}
 
     # Strip comments
     if '#' in actions_str:
