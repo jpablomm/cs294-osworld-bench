@@ -176,9 +176,64 @@ async def proxy_agent_card_legacy(request: Request):
     return await proxy_agent_card(request)
 
 
+def get_agent_port_by_id(agent_id: str) -> int | None:
+    """Get the port for a specific agent by ID."""
+    port_file = os.path.join(".ab", "agents", agent_id, "port")
+    if os.path.exists(port_file):
+        try:
+            with open(port_file, "r") as f:
+                return int(f.read().strip())
+        except (ValueError, FileNotFoundError):
+            return None
+    return None
+
+
+# Patch: Override /to_agent/{agent_id}/.well-known/agent-card.json with better error handling
+# This prevents 500 errors when agents are still starting up
+@earthshaker_app.get("/to_agent/{agent_id}/.well-known/agent-card.json")
+async def proxy_agent_card_by_id(agent_id: str, request: Request):
+    """Proxy agent card with graceful handling when agent not ready."""
+    agent_port = get_agent_port_by_id(agent_id)
+
+    if agent_port is None:
+        logger.warning(f"Agent {agent_id} not ready yet (no port file)")
+        return JSONResponse(
+            {"error": f"Agent {agent_id} is not ready yet. Try again in a few seconds."},
+            status_code=503  # Service Unavailable - indicates temporary condition
+        )
+
+    agent_url = f"http://localhost:{agent_port}/.well-known/agent-card.json"
+    logger.info(f"Proxying agent card for {agent_id} to port {agent_port}")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(agent_url)
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers={
+                    k: v for k, v in response.headers.items()
+                    if k.lower() not in ('content-length', 'transfer-encoding')
+                },
+            )
+    except httpx.ConnectError:
+        logger.warning(f"Agent {agent_id} port {agent_port} not accepting connections yet")
+        return JSONResponse(
+            {"error": f"Agent {agent_id} is starting up. Try again in a few seconds."},
+            status_code=503
+        )
+    except Exception as e:
+        logger.error(f"Error fetching agent card for {agent_id}: {e}")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500
+        )
+
+
 logger.info("A2A root proxy routes added to earthshaker controller")
 logger.info("  POST / -> proxies to agent JSON-RPC endpoint")
 logger.info("  GET /.well-known/agent-card.json -> proxies to agent")
+logger.info("  GET /to_agent/{id}/.well-known/agent-card.json -> graceful startup handling")
 
 
 def run_ctrl():

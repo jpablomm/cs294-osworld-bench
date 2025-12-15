@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 # Configuration from environment
 MODEL = os.environ.get("MODEL", os.environ.get("GPT5_MODEL", "gpt-5.1"))
 TEMPERATURE = float(os.environ.get("TEMPERATURE", os.environ.get("GPT4V_TEMPERATURE", "1.0")))
+# For Qwen models, set OSWORLD_OBS_TYPE=screenshot (pure visual grounding)
 OBSERVATION_TYPE = os.environ.get("OSWORLD_OBS_TYPE", "screenshot_a11y_tree")
 ACTION_SPACE = os.environ.get("ACTION_SPACE", "pyautogui")
 MAX_TRAJECTORY_LENGTH = int(os.environ.get("MAX_TRAJECTORY_LENGTH", "3"))
@@ -266,7 +267,7 @@ def create_app():
             # Use model from request if provided, otherwise use default
             request_model = body.get("model", MODEL)
 
-            logger.info(f"[/decide] Frame {frame_id}: Processing with {len(trajectory)} history steps, model={request_model}, a11y_tree={'yes' if accessibility_tree else 'no'} ({len(accessibility_tree) if accessibility_tree else 0} chars)")
+            logger.info(f"[/decide] Frame {frame_id}: Processing with {len(trajectory)} history steps, model={request_model}, obs_type={OBSERVATION_TYPE}, a11y_tree={'yes' if accessibility_tree else 'no'} ({len(accessibility_tree) if accessibility_tree else 0} chars)")
 
             # Create fresh agent for this request (stateless)
             agent = PromptAgent(

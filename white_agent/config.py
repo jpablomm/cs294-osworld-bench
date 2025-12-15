@@ -13,6 +13,7 @@ MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "1500"))
 TOP_P = float(os.environ.get("TOP_P", "0.9"))
 
 # Observation/Action Configuration
+# For Qwen models, set OSWORLD_OBS_TYPE=screenshot (pure visual grounding)
 OBSERVATION_TYPE = os.environ.get("OSWORLD_OBS_TYPE", "screenshot_a11y_tree")
 ACTION_SPACE = os.environ.get("ACTION_SPACE", "pyautogui")
 MAX_TRAJECTORY_LENGTH = int(os.environ.get("MAX_TRAJECTORY_LENGTH", "3"))

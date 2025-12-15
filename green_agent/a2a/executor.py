@@ -308,6 +308,7 @@ class GreenAgentExecutor(AgentExecutor):
         1. Structured config in metadata
         2. JSON in message
         3. Key fields in metadata
+        4. XML-style tags in message (AgentBeats format)
         """
         # Option 1: Check metadata for structured config
         if metadata and "config" in metadata:
@@ -321,22 +322,36 @@ class GreenAgentExecutor(AgentExecutor):
         except json.JSONDecodeError:
             pass
 
-        # Option 3: Extract from metadata fields
+        # Option 3: Extract from metadata fields and message text
         config = {}
 
         # Extract white_agent_url (required)
+        # Check metadata first, then look for XML tags in message (AgentBeats format)
         if metadata.get("white_agent_url"):
             config["white_agent_url"] = metadata["white_agent_url"]
         else:
-            raise ValueError("white_agent_url must be provided in metadata")
+            # Try extracting from message using XML-style tags (AgentBeats format)
+            # Format: <white_agent_url>https://...</white_agent_url>
+            import re
+            url_match = re.search(r'<white_agent_url>\s*(https?://[^\s<]+)\s*</white_agent_url>', message, re.IGNORECASE)
+            if url_match:
+                config["white_agent_url"] = url_match.group(1).strip()
+                logger.info(f"Extracted white_agent_url from message: {config['white_agent_url']}")
+            else:
+                raise ValueError("white_agent_url must be provided in metadata or message")
 
-        # Extract osworld_task_id (required)
+        # Extract osworld_task_id (with default for AgentBeats testing)
+        # Default task: ec4e3f68-9ea4-4c18-a5c9-69f89d1178b3
+        DEFAULT_OSWORLD_TASK_ID = "ec4e3f68-9ea4-4c18-a5c9-69f89d1178b3"
+
         if metadata.get("osworld_task_id"):
             config["osworld_task_id"] = metadata["osworld_task_id"]
         elif metadata.get("task_id"):
             config["osworld_task_id"] = metadata["task_id"]
         else:
-            raise ValueError("osworld_task_id must be provided in metadata")
+            # Use default task for AgentBeats integration testing
+            config["osworld_task_id"] = DEFAULT_OSWORLD_TASK_ID
+            logger.info(f"No osworld_task_id provided, using default: {DEFAULT_OSWORLD_TASK_ID}")
 
         # Extract optional parameters (check both top-level and nested agent_config)
         agent_config = metadata.get("agent_config", {})

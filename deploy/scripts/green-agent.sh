@@ -119,20 +119,33 @@ echo ""
 # Step 3: Deploy to Cloud Run
 echo "Step 3: Deploying to Cloud Run..."
 
+# Load all environment variables from .env file first
+if [ -f ".env" ]; then
+    echo "Loading configuration from .env..."
+    export $(grep -v '^#' .env | xargs)
+fi
+
 # Build environment variables
 ENV_VARS="GCP_PROJECT=$PROJECT_ID"
 ENV_VARS="$ENV_VARS,USE_NATIVE_OSWORLD=1"
 ENV_VARS="$ENV_VARS,USE_FAKE_OSWORLD=0"
 ENV_VARS="$ENV_VARS,OSWORLD_MAX_STEPS=15"
 
+# VM Pool configuration (for snapshot-based VM reuse)
+# Values come from .env or use defaults
+VM_POOL_ENABLED="${VM_POOL_ENABLED:-false}"
+VM_POOL_SIZE="${VM_POOL_SIZE:-1}"
+VM_POOL_SNAPSHOT_NAME="${VM_POOL_SNAPSHOT_NAME:-osworld-golden-snapshot}"
+
+ENV_VARS="$ENV_VARS,VM_POOL_ENABLED=$VM_POOL_ENABLED"
+ENV_VARS="$ENV_VARS,VM_POOL_SIZE=$VM_POOL_SIZE"
+ENV_VARS="$ENV_VARS,VM_POOL_SNAPSHOT_NAME=$VM_POOL_SNAPSHOT_NAME"
+
+echo "VM Pool: enabled=$VM_POOL_ENABLED, size=$VM_POOL_SIZE, snapshot=$VM_POOL_SNAPSHOT_NAME"
+
 # Add API key if generated
 if [ -n "$API_KEY" ]; then
     ENV_VARS="$ENV_VARS,GREEN_AGENT_API_KEY=$API_KEY"
-fi
-
-# Load Supabase credentials from .env file if available
-if [ -f ".env" ]; then
-    export $(grep -v '^#' .env | xargs)
 fi
 
 # Add Supabase credentials (required for screenshot storage)

@@ -87,6 +87,12 @@ echo "Step 3: Deploying to Cloud Run..."
 # We'll update it after deployment, but set HTTPS_ENABLED now
 PREDICTED_HOST="${SERVICE_NAME}-750082808015.${REGION}.run.app"
 
+# Load all environment variables from .env file first
+if [ -f ".env" ]; then
+    echo "Loading configuration from .env..."
+    export $(grep -v '^#' .env | xargs)
+fi
+
 # Build environment variables
 ENV_VARS="GCP_PROJECT=$PROJECT_ID"
 ENV_VARS="$ENV_VARS,USE_NATIVE_OSWORLD=1"
@@ -94,10 +100,17 @@ ENV_VARS="$ENV_VARS,USE_FAKE_OSWORLD=0"
 ENV_VARS="$ENV_VARS,OSWORLD_MAX_STEPS=15"
 ENV_VARS="$ENV_VARS,HTTPS_ENABLED=true"
 
-# Load Supabase credentials from .env file if available
-if [ -f ".env" ]; then
-    export $(grep -v '^#' .env | xargs)
-fi
+# VM Pool configuration (for snapshot-based VM reuse)
+# Values come from .env or use defaults
+VM_POOL_ENABLED="${VM_POOL_ENABLED:-false}"
+VM_POOL_SIZE="${VM_POOL_SIZE:-1}"
+VM_POOL_SNAPSHOT_NAME="${VM_POOL_SNAPSHOT_NAME:-osworld-golden-snapshot}"
+
+ENV_VARS="$ENV_VARS,VM_POOL_ENABLED=$VM_POOL_ENABLED"
+ENV_VARS="$ENV_VARS,VM_POOL_SIZE=$VM_POOL_SIZE"
+ENV_VARS="$ENV_VARS,VM_POOL_SNAPSHOT_NAME=$VM_POOL_SNAPSHOT_NAME"
+
+echo "VM Pool: enabled=$VM_POOL_ENABLED, size=$VM_POOL_SIZE, snapshot=$VM_POOL_SNAPSHOT_NAME"
 
 # Add Supabase credentials (required for screenshot storage)
 if [ -n "$SUPABASE_URL" ]; then
