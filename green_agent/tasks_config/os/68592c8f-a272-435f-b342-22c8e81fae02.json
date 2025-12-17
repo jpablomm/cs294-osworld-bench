@@ -1,0 +1,48 @@
+{
+  "id": "68592c8f-a272-435f-b342-22c8e81fae02",
+  "snapshot": "os",
+  "instruction": "Create an annotated git tag named 'v1.0.0' with the message 'First stable release' on the current commit in the repository at /home/user/project.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "mkdir -p /home/user/project && cd /home/user/project && git init && echo 'print(1)' > app.py && git add . && git commit -m 'Release ready'"]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.hotkey('ctrl', 'alt', 't'); time.sleep(1)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/68592c8f-a272-435f-b342-22c8e81fae02",
+  "related_apps": ["os", "git"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "cd /home/user/project && git tag -l 2>/dev/null && git tag -n1 v1.0.0 2>/dev/null",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["v1.0.0", "First stable release"],
+        "exclude": []
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

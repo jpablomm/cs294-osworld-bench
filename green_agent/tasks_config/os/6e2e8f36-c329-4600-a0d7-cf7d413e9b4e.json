@@ -1,0 +1,48 @@
+{
+  "id": "6e2e8f36-c329-4600-a0d7-cf7d413e9b4e",
+  "snapshot": "os",
+  "instruction": "Create a symbolic link at /home/user/docs that points to /home/user/Documents.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "mkdir -p /home/user/Documents && echo 'test document' > /home/user/Documents/test.txt"]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.hotkey('ctrl', 'alt', 't'); time.sleep(1)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/6e2e8f36-c329-4600-a0d7-cf7d413e9b4e",
+  "related_apps": ["os"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "ls -la /home/user/docs 2>/dev/null && cat /home/user/docs/test.txt 2>/dev/null",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["-> /home/user/Documents", "test document"],
+        "exclude": ["No such file"]
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

@@ -1,0 +1,48 @@
+{
+  "id": "4b0f8086-6735-4c96-abb4-2b0bafd822d1",
+  "snapshot": "os",
+  "instruction": "Change the desktop wallpaper to the image located at /home/user/Pictures/wallpaper.jpg.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "mkdir -p /home/user/Pictures && wget -q -O /home/user/Pictures/wallpaper.jpg 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b6/Image_created_with_a_mobile_phone.png/640px-Image_created_with_a_mobile_phone.png' || echo 'placeholder' > /home/user/Pictures/wallpaper.jpg"]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.click(960, 540); time.sleep(0.5)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/4b0f8086-6735-4c96-abb4-2b0bafd822d1",
+  "related_apps": ["os", "gnome-settings"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "gsettings get org.gnome.desktop.background picture-uri",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["wallpaper.jpg"],
+        "exclude": []
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

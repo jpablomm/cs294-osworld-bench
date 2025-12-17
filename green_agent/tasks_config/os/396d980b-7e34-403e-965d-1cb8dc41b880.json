@@ -1,0 +1,48 @@
+{
+  "id": "396d980b-7e34-403e-965d-1cb8dc41b880",
+  "snapshot": "os",
+  "instruction": "The file /home/user/project/config.py has been modified. Stage this file and commit the changes with the message 'Update configuration settings'.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "mkdir -p /home/user/project && cd /home/user/project && git init && echo 'DEBUG=False' > config.py && git add . && git commit -m 'Initial config' && echo 'DEBUG=True' > config.py"]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.hotkey('ctrl', 'alt', 't'); time.sleep(1)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/396d980b-7e34-403e-965d-1cb8dc41b880",
+  "related_apps": ["os", "git"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "cd /home/user/project && git log --oneline -1 2>/dev/null && git status 2>/dev/null",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["Update configuration settings", "nothing to commit"],
+        "exclude": ["Changes not staged", "modified:"]
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

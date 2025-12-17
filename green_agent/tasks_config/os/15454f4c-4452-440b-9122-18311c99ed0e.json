@@ -1,0 +1,48 @@
+{
+  "id": "15454f4c-4452-440b-9122-18311c99ed0e",
+  "snapshot": "os",
+  "instruction": "In the git repository at /home/user/project, create a new branch called 'feature/user-auth' and switch to it.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "mkdir -p /home/user/project && cd /home/user/project && git init && echo 'v1' > app.py && git add . && git commit -m 'Initial'"]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.hotkey('ctrl', 'alt', 't'); time.sleep(1)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/15454f4c-4452-440b-9122-18311c99ed0e",
+  "related_apps": ["os", "git"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "cd /home/user/project && git branch 2>/dev/null",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["* feature/user-auth"],
+        "exclude": []
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

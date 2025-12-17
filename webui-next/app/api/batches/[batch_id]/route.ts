@@ -24,7 +24,7 @@ export async function GET(
     // Calculate aggregate statistics (matching BatchResponse type)
     const completedAssessments = assessments.filter((a) => a.status === "completed");
     const completedCount = completedAssessments.length;
-    const successCount = completedAssessments.filter((a) => a.success === true).length;
+    const successCount = completedAssessments.filter((a) => a.success === 1).length;
 
     const aggregate_stats = {
       success_rate: completedCount > 0 ? (successCount / completedCount) * 100 : 0,

@@ -41,5 +41,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:${PORT}/status || exit 1
 
-# Use AgentBeats controller
-CMD ["sh", "-c", "agentbeats run_ctrl"]
+# Use patched AgentBeats controller with catch-all proxy
+# The controller module patches earthshaker to add /to_agent/{id}/{path} proxy
+CMD ["python", "-m", "white_agent.a2a.controller"]

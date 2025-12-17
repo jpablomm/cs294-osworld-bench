@@ -1,0 +1,63 @@
+{
+  "id": "6d4db1ff-a20e-48e4-9350-c9434c614dec",
+  "snapshot": "chrome",
+  "instruction": "Change the default font size in Chrome to 'Large' (or increase it to a larger size than default).",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "launch",
+      "parameters": {
+        "command": ["google-chrome", "--remote-debugging-port=1337"]
+      }
+    },
+    {
+      "type": "launch",
+      "parameters": {
+        "command": ["socat", "tcp-listen:9222,fork", "tcp:localhost:1337"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/6d4db1ff-a20e-48e4-9350-c9434c614dec",
+  "related_apps": ["chrome"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "launch",
+        "parameters": {
+          "command": ["pkill", "chrome"]
+        }
+      },
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 2
+        }
+      },
+      {
+        "type": "launch",
+        "parameters": {
+          "command": ["google-chrome", "--remote-debugging-port=1337"]
+        }
+      },
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 3
+        }
+      }
+    ],
+    "func": "exact_match",
+    "result": {
+      "type": "chrome_font_size"
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "expected": "20"
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

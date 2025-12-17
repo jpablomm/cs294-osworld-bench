@@ -1,0 +1,48 @@
+{
+  "id": "2a6a93ac-4ce8-4485-ab43-77a46eafadff",
+  "snapshot": "os",
+  "instruction": "Initialize a new git repository in the /home/user/myproject directory, add all files to staging, and create an initial commit with the message 'Initial commit'.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "mkdir -p /home/user/myproject && echo '# My Project' > /home/user/myproject/README.md && echo 'print(\"Hello World\")' > /home/user/myproject/main.py"]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.hotkey('ctrl', 'alt', 't'); time.sleep(1)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/2a6a93ac-4ce8-4485-ab43-77a46eafadff",
+  "related_apps": ["os", "git"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "cd /home/user/myproject && git log --oneline -1 2>/dev/null && git status 2>/dev/null",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["Initial commit", "nothing to commit"],
+        "exclude": ["not a git repository", "Untracked files"]
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

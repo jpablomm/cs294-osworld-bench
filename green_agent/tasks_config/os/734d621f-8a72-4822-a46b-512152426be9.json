@@ -1,0 +1,48 @@
+{
+  "id": "734d621f-8a72-4822-a46b-512152426be9",
+  "snapshot": "os",
+  "instruction": "Add the Files (Nautilus) application to the GNOME dock favorites bar if it's not already there.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "gsettings set org.gnome.shell favorite-apps \"['google-chrome.desktop', 'thunderbird.desktop']\""]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.click(960, 540); time.sleep(0.5)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/734d621f-8a72-4822-a46b-512152426be9",
+  "related_apps": ["os", "gnome-shell"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "gsettings get org.gnome.shell favorite-apps",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["org.gnome.Nautilus.desktop"],
+        "exclude": []
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

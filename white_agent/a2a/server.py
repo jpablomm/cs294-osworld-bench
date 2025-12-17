@@ -376,27 +376,9 @@ def start_agent(host: str = "0.0.0.0", port: int = 8001):
     logger.info(f"Starting White Agent (A2A) on {host}:{port}")
     logger.info(f"Model: {MODEL}, Observation type: {OBSERVATION_TYPE}")
 
-    # Get agent URL from environment (set by AgentBeats controller)
-    agent_url = os.getenv("AGENT_URL", f"http://{host}:{port}")
-    logger.info(f"Agent URL: {agent_url}")
-
-    # Create agent card
-    card = prepare_agent_card(agent_url, MODEL)
-
-    # Create request handler with our executor
-    request_handler = DefaultRequestHandler(
-        agent_executor=PromptAgentExecutor(),
-        task_store=InMemoryTaskStore(),
-    )
-
-    # Create A2A application
-    a2a_app = A2AStarletteApplication(
-        agent_card=card,
-        http_handler=request_handler,
-    )
-
-    # Run the server
-    uvicorn.run(a2a_app.build(), host=host, port=port)
+    # Use the module-level app which includes /decide endpoint
+    # This ensures green agent can call /decide for stateless operation
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

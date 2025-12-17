@@ -1,0 +1,48 @@
+{
+  "id": "78a432ab-ea1e-4ea3-91ed-4b76803dd433",
+  "snapshot": "os",
+  "instruction": "Display the last 5 commits from the git repository at /home/user/project in one-line format and save the output to /home/user/git_history.txt.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "mkdir -p /home/user/project && cd /home/user/project && git init && for i in 1 2 3 4 5 6 7; do echo \"content $i\" > file$i.txt && git add . && git commit -m \"Commit number $i\"; done"]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.hotkey('ctrl', 'alt', 't'); time.sleep(1)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/78a432ab-ea1e-4ea3-91ed-4b76803dd433",
+  "related_apps": ["os", "git"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "wc -l < /home/user/git_history.txt 2>/dev/null && cat /home/user/git_history.txt 2>/dev/null",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["5", "Commit number"],
+        "exclude": ["No such file"]
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

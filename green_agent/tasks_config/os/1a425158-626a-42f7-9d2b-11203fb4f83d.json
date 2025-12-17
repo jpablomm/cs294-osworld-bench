@@ -1,0 +1,48 @@
+{
+  "id": "1a425158-626a-42f7-9d2b-11203fb4f83d",
+  "snapshot": "os",
+  "instruction": "Set Visual Studio Code as the default application for opening .txt text files.",
+  "source": "custom-benchmark-expansion",
+  "config": [
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["bash", "-c", "echo 'Sample text content' > /home/user/sample.txt"]
+      }
+    },
+    {
+      "type": "execute",
+      "parameters": {
+        "command": ["python", "-c", "import pyautogui; import time; pyautogui.click(960, 540); time.sleep(0.5)"]
+      }
+    }
+  ],
+  "trajectory": "trajectories/1a425158-626a-42f7-9d2b-11203fb4f83d",
+  "related_apps": ["os", "vscode"],
+  "evaluator": {
+    "postconfig": [
+      {
+        "type": "sleep",
+        "parameters": {
+          "seconds": 1
+        }
+      }
+    ],
+    "func": "check_include_exclude",
+    "result": {
+      "type": "vm_command_line",
+      "command": "xdg-mime query default text/plain",
+      "shell": true
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "include": ["code"],
+        "exclude": []
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}

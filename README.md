@@ -1,588 +1,382 @@
-# Green Agent × Native OSWorld — Production System
+# Green Agent - Autonomous Agent Evaluation System
 
-A **production-ready autonomous agent evaluation system** using **native OSWorld** (no Docker/QEMU) with **20x faster performance** than traditional approaches. Built for Google Cloud Platform with golden VM images for instant deployment.
+An academic project for evaluating autonomous agents on desktop automation tasks. This system provides infrastructure for running agents against the [OSWorld benchmark](https://github.com/xlang-ai/OSWorld), with cloud deployment, multi-model support, and A2A protocol compliance for AgentBeats.
 
----
+## What This Project Provides
 
-## 🎯 Project Status
+**Our contributions (this repository):**
+- **Green Agent**: Assessment orchestrator that manages task execution and evaluation
+- **White Agent**: LLM-powered decision agent supporting multiple models (GPT-4o, Claude, Gemini, Qwen)
+- **Web UI**: Next.js dashboard for launching assessments and viewing results
+- **Cloud Infrastructure**: GCP deployment with golden VM images and VM pooling
+- **A2A Protocol**: AgentBeats platform integration for standardized agent communication
 
-**✅ PRODUCTION READY** — Native mode fully operational and tested with Web UI
-
-- ✅ **Native OSWorld Mode**: REST API integration, 100ms latency
-- ✅ **Golden GCE Images**: 60-second boot (vs 20-minute setup)
-- ✅ **Baseline White Agent Stub**: Included for smoke tests (replace or upgrade for real task execution)
-- ✅ **GPT-4o Benchmarking**: Full OSWorld benchmark support with vision-language models
-- ✅ **Web UI Dashboard**: Launch, monitor, results browser, leaderboard
-- ✅ **Parallel Runs**: 1-10 concurrent runs for statistical significance
-- ✅ **Database-Backed**: SQLite with auto-migration, batch tracking, leaderboard rankings
-- ✅ **Tested & Verified**: Chrome launch, screenshots, full task execution (with production white agent)
-
-**Performance vs Docker/QEMU**:
-```
-Boot time:     5-15 minutes → 60 seconds    (10-15x faster)
-Screenshot:    2-5 seconds  → 0.1 seconds   (20-50x faster)
-Reliability:   ~20%         → ~99%          (5x better)
-Cost/task:     $0.05-0.10   → $0.016        (3-6x cheaper)
-```
+**External dependency:**
+- **OSWorld** (in `vendor/`): Desktop benchmark framework from [xlang-ai/OSWorld](https://github.com/xlang-ai/OSWorld) that provides task definitions, desktop environment server, and evaluation metrics
 
 ---
 
-## 🚀 Quick Start
+## Running Assessments
 
-### Option 1: Fake Mode (Development/Testing)
+### Prerequisites
+
+1. **Set up environment variables:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your API keys (OPENAI_API_KEY, etc.)
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Set up a Desktop VM** (for production mode):
+   ```bash
+   gcloud compute instances create desktop-vm-1 \
+     --image=osworld-golden-v2-gnome \
+     --machine-type=n1-standard-4 \
+     --zone=us-central1-a
+
+   VM_IP=$(gcloud compute instances describe desktop-vm-1 \
+     --zone=us-central1-a \
+     --format="get(networkInterfaces[0].accessConfigs[0].natIP)")
+   ```
+
+### Running White Agent + Green Agent
+
+**Step 1: Start the White Agent (LLM decision agent)**
 
 ```bash
-# No VM needed - instant testing
-export USE_FAKE_OSWORLD=1
-uvicorn green_agent.app:app --port 8000
+# Start white agent on port 9002
+LOG_LEVEL=DEBUG uvicorn white_agent.a2a.server:app --host 0.0.0.0 --port 9002
 
-# Test
-curl -X POST http://localhost:8000/assessments/start \
+# Or with specific model:
+MODEL=gpt-4o LOG_LEVEL=DEBUG uvicorn white_agent.a2a.server:app --host 0.0.0.0 --port 9002
+```
+
+**Step 2: Start the Green Agent (assessment orchestrator)**
+
+```bash
+# Production mode (with GCP VM management):
+OSWORLD_OBS_TYPE="screenshot" \
+GOOGLE_CLOUD_PROJECT=your-gcp-project \
+GREEN_AGENT_API_KEY="your-api-key" \
+uvicorn green_agent.a2a.server_a2a:app --host 0.0.0.0 --port 8001
+
+# For mock mode (no VM needed, for testing):
+USE_FAKE_OSWORLD=1 \
+GOOGLE_CLOUD_PROJECT=your-gcp-project \
+GREEN_AGENT_API_KEY="dev-key-local-testing" \
+uvicorn green_agent.a2a.server_a2a:app --host 0.0.0.0 --port 8001
+```
+
+**Step 3: Submit an assessment task**
+
+```bash
+# Submit a Chrome task for evaluation
+curl -X POST http://localhost:8001/task \
   -H "Content-Type: application/json" \
-  -d '{"task_id":"test", "white_agent_url":"http://localhost:9000"}'
-```
-
-### Option 2: Native Mode (Production) ⭐ Recommended
-
-```bash
-# 1. Create OSWorld VM from golden image (60 seconds!)
-gcloud compute instances create osworld-1 \
-  --image=osworld-golden-v2-gnome \
-  --machine-type=n1-standard-4 \
-  --zone=us-central1-a
-
-# 2. Get VM IP
-VM_IP=$(gcloud compute instances describe osworld-1 \
-  --zone=us-central1-a \
-  --format="get(networkInterfaces[0].accessConfigs[0].natIP)")
-
-# 3. Start Green Agent
-export USE_FAKE_OSWORLD=0
-export USE_NATIVE_OSWORLD=1
-export OSWORLD_SERVER_URL="http://$VM_IP:5000"
-uvicorn green_agent.app:app --port 8000
-
-# 4. Check health
-curl http://localhost:8000/health
-# Should show: "osworld_mode": "native"
-```
-
-### Option 3: Web UI (Local Orchestrator) 🎯 Recommended
-
-**Full-featured web interface** for launching assessments, monitoring progress, and viewing results.  
-The Web UI talks to the A2A green agent and an A2A white agent—run both before starting the server:
-
-```bash
-# Terminal 1: start the A2A green agent (provides /task endpoint for the Web UI)
-uvicorn orchestrator.a2a_green_agent:app --host 0.0.0.0 --port 8001
-
-# Terminal 2: start a white agent
-# The bundled stub only observes and finishes after a few frames—swap in white_agent/gpt4v_server.py
-# or your own agent when you need real task execution.
-uvicorn white_agent.a2a_adapter:app --host 0.0.0.0 --port 9002
-
-# Terminal 3: install dependencies and launch the Web UI server
-pip install -r requirements.txt
-cd orchestrator
-uvicorn webui_server:app --host 0.0.0.0 --port 3001
-
-# Open the dashboard in your browser
-open http://localhost:3001
-
-# Features:
-# - Dashboard: System health, stats, recent assessments
-# - Launch: Start single or parallel assessments
-# - Results: Browse all assessments with filters
-# - Leaderboard: Compare agent configurations
-# - Batch Monitoring: Real-time parallel run tracking
-```
-
-See [docs/getting-started/RUN_COMPLETE_SYSTEM.md](docs/getting-started/RUN_COMPLETE_SYSTEM.md) for complete details.
-
-### Option 4: Cloud Run Orchestrator (Production Scale)
-
-**Serverless Cloud Run orchestrator** — Auto-creates VMs per task, executes assessments, cleans up:
-
-```bash
-# 1. Deploy orchestrator to Cloud Run (one-time setup)
-bash deploy_orchestrator.sh
-# Outputs: Service URL: https://osworld-orchestrator-xxxxx-uc.a.run.app
-
-# 2. Submit task
-curl -X POST https://osworld-orchestrator-xxxxx-uc.a.run.app/tasks \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task_id": "osworld-ubuntu-tiny",
-    "white_agent_url": "http://your-white-agent.run.app"
-  }'
-```
-
-### Option 5: A2A Green Agent on Cloud Run (AgentBeats Platform) ⭐ New
-
-**A2A-compliant green agent with AgentBeats platform compatibility** — Serverless deployment optimized for minimal dependencies and fast builds:
-
-```bash
-# 1. Deploy to Cloud Run
-gcloud builds submit --config cloudbuild-production.yaml && \
-gcloud run deploy green-agent \
-  --image us-central1-docker.pkg.dev/cs294-475401/green-agent/green-agent \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --timeout=5m
-
-# 2. Test endpoints
-curl https://green-agent-750082808015.us-central1.run.app/health
-curl https://green-agent-750082808015.us-central1.run.app/.well-known/agent-card.json
-
-# 3. Submit A2A task
-curl -X POST https://green-agent-750082808015.us-central1.run.app/task \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
   -d '{
     "task_id": "assessment-001",
-    "message": "Run OSWorld assessment",
-    "metadata": {"osworld_task_id": "osworld-chrome-001"}
+    "message": "Run desktop automation assessment",
+    "metadata": {
+      "osworld_task_id": "030eeff7-b492-4218-b312-701ec99ee0cc",
+      "domain": "chrome",
+      "white_agent_url": "http://localhost:9002",
+      "max_steps": 15
+    }
   }'
 ```
 
-**Key features:**
-- ✅ AgentBeats platform compatible (discovery endpoint)
-- ✅ Optimized dependencies (11 packages vs 72)
-- ✅ Fast builds (2-3 minutes vs 10+)
-- ✅ Python 3.12 for stability
-- ✅ Direct execution (no controller overhead)
+**Available task domains and sample task IDs:**
+- `chrome` (52 tasks): `030eeff7-b492-4218-b312-701ec99ee0cc`, `06fe7178-4491-4589-810f-2e2bc9502122`
+- `os` (34 tasks): `13584542-872b-42d8-b299-866967b5c3ef`, `5ea617a3-0e86-4ba6-aab2-dac9aa2e8d57`
+- `libreoffice_calc`, `libreoffice_writer`, `libreoffice_impress`, `gimp`, `vlc`, `vs_code`, `thunderbird`
 
-📖 **Full documentation:** [docs/CLOUD_RUN_DEPLOYMENT.md](docs/CLOUD_RUN_DEPLOYMENT.md)
+Task definitions are in `green_agent/tasks_config/{domain}/`.
 
 ---
 
-## 📖 Documentation
+## Testing Green Agent Evaluation
 
-Comprehensive documentation is organized in the [`docs/`](docs/) directory:
-
-### Getting Started
-- **[Native Mode Guide](docs/getting-started/NATIVE_MODE.md)** - Using native OSWorld mode
-- **[Complete System Guide](docs/getting-started/RUN_COMPLETE_SYSTEM.md)** - End-to-end setup
-- **[OSWorld Integration](docs/getting-started/OSWORLD_INTEGRATION.md)** - Dependency installation
-
-### Deployment
-- **[Cloud Run Deployment](docs/CLOUD_RUN_DEPLOYMENT.md)** - A2A Green Agent on Cloud Run (AgentBeats compatible) ⭐
-- **[GCP Deployment](docs/deployment/GCP_DEPLOYMENT.md)** - Production deployment guide
-- **[Golden Image Creation](docs/deployment/CREATE_GOLDEN_IMAGE.md)** - Creating VM images
-- **[GNOME Image Deployment](docs/deployment/DEPLOY_GNOME_IMAGE.md)** - Full desktop support
-- **[Cloud SQL Migration](docs/deployment/CLOUD_SQL_MIGRATION.md)** - PostgreSQL setup
-- **[AgentBeats Integration](AGENTBEATS_INTEGRATION.md)** - Platform integration (local dev)
-
-### Reference
-- **[OSWorld API](docs/api/OSWORLD_API.md)** - Complete REST API reference
-- **[Architecture](docs/architecture/CLOUD_FIRST_ARCHITECTURE.md)** - System architecture
-- **[Troubleshooting](docs/troubleshooting/DEBUG_OSWORLD.md)** - Common issues and solutions
-
-See [docs/README.md](docs/README.md) for the complete documentation index.
-
----
-
-## 🤝 AgentBeats Compliance (A2A Protocol)
-
-**Status**: Week 2 Complete ✅ | **Compliance**: ~85% (up from 47% baseline)
-
-This system implements the **AgentBeats A2A protocol** for standardized, benchmark-agnostic agent evaluation. The green agent orchestrates assessments while white agents execute tasks, communicating via A2A messages with self-explanatory tool descriptions. Production-ready GPT-4V white agent included (`white_agent/gpt4v_server.py`).
-
-### Recent Improvements (Week 2)
-
-- ✅ **Tool Format Specification**: Comprehensive JSON Schema with validation metadata, examples, and return types
-- ✅ **Self-Explanatory Tasks**: Tool descriptions without infrastructure details (no VM IPs/ports exposed)
-- ✅ **Response Validation**: Comprehensive validation of white agent responses with helpful error messages
-- ✅ **Improved Error Handling**: VM cleanup on timeout, proper evaluation failure handling
-- ✅ **Enhanced Documentation**: White agent development guide, troubleshooting guide, tool format spec
-
-### Quick Start with A2A
+### Test evaluation on a specific task
 
 ```bash
-# Terminal 1: Start green agent
-uvicorn orchestrator.a2a_green_agent:app --port 8001
-
-# Terminal 2: Start GPT-4V white agent (production-ready)
-uvicorn white_agent.gpt4v_server:app --port 9002
-
-# Terminal 3: Run assessment
-python launcher_a2a.py \
-  --task-id <osworld-task-id> \
-  --white-agent-url http://localhost:9002 \
-  --green-agent-url http://localhost:8001 \
-  --max-steps 15 \
-  --domain chrome
+# Test the evaluation module with a real VM
+python test_evaluation.py --vm-ip $VM_IP
 ```
 
-### Documentation
+This runs the trash recovery task (`5ea617a3-0e86-4ba6-aab2-dac9aa2e8d57`) and verifies:
+1. Evaluation returns 0.0 when the task is NOT completed
+2. Evaluation returns 1.0 when the task IS completed
 
-- **[White Agent Development Guide](docs/WHITE_AGENT_DEVELOPMENT.md)**: Complete guide for building A2A-compatible agents
-- **[Tool Description Format](docs/TOOL_DESCRIPTION_FORMAT.md)**: JSON Schema specification for tool descriptions
-- **[A2A Troubleshooting](docs/troubleshooting/A2A_PROTOCOL.md)**: Common issues and solutions
-- **[AgentBeats Progress](AGENTBEATS_PROGRESS.md)**: Detailed implementation status
-
-### Key Features
-
-- **Self-Explanatory**: Tasks include all needed information (tools, format, instructions)
-- **Benchmark-Agnostic**: No OSWorld-specific knowledge required by white agents
-- **Standardized Protocol**: Consistent request/response format following AgentBeats guidelines
-- **Comprehensive Validation**: Parameter validation, type checking, bounds verification
-- **Ground Truth Evaluation**: Uses OSWorld evaluators (no self-assessment trust)
-- **Production-Tested**: GPT-4V integration fully operational with 26 passing security tests
-
-See [AGENTBEATS_PROGRESS.md](AGENTBEATS_PROGRESS.md) for complete implementation details and compliance tracking.
-
----
-
-## 🏗️ Architecture
-
-### Native Mode (Production)
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    Your Application                       │
-│                  (White Agent on port 9000)               │
-└────────────────────────┬─────────────────────────────────┘
-                         │
-                         ▼
-┌──────────────────────────────────────────────────────────┐
-│                    Green Agent                            │
-│                  (FastAPI on port 8000)                   │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ osworld_adapter.py                                 │  │
-│  │  - Native Mode ✅ (Production)                     │  │
-│  │  - Fake Mode   ✅ (Testing)                        │  │
-│  │  - Docker Mode ⚠️  (Deprecated)                    │  │
-│  └──────────────────────┬─────────────────────────────┘  │
-│                         │                                 │
-│  ┌──────────────────────▼─────────────────────────────┐  │
-│  │ osworld_client.py (REST API Client)                │  │
-│  │  - screenshot(), execute(), accessibility_tree()   │  │
-│  └──────────────────────┬─────────────────────────────┘  │
-└─────────────────────────┼─────────────────────────────────┘
-                          │
-                          │ HTTP REST (port 5000)
-                          ▼
-┌──────────────────────────────────────────────────────────┐
-│                  OSWorld VM (GCE)                         │
-│         Golden Image: osworld-golden-v2-gnome             │
-│                                                           │
-│  GDM3 → GNOME Shell (Display :0) → OSWorld (Flask :5000) │
-│         X.Org dummy driver (1920x1080 virtual display)    │
-│         Scrot for screenshots (patched main.py)           │
-│         Screen lock/blanking disabled (idle-delay=0)      │
-│                                                           │
-│  Apps: Chrome, Firefox, LibreOffice, GIMP, Nautilus      │
-└──────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🎯 Key Features
-
-### Native OSWorld Client
-
-```python
-from green_agent.osworld_client import OSWorldClient
-
-client = OSWorldClient("http://10.128.0.10:5000")
-
-# Screenshots
-screenshot = client.screenshot()  # PNG bytes
-screenshot_b64 = client.screenshot_base64()  # Base64
-screenshot_img = client.screenshot_image()  # PIL Image
-
-# Execute commands
-result = client.execute(["google-chrome", "--version"])
-result = client.execute("ls -la", shell=True)
-
-# Execute Python code (pyautogui)
-result = client.run_python("import pyautogui\npyautogui.click(100, 200)")
-
-# Mouse interactions
-client.mouse_move(x=100, y=200)
-client.click_at(x=100, y=200)
-
-# Keyboard interactions
-client.type_text("Hello World")
-client.press_key("enter")
-client.hotkey("ctrl", "c")  # Copy
-
-# Get UI state
-tree = client.get_accessibility_tree()
-cursor = client.get_cursor_position()
-screen_size = client.get_screen_size()
-
-# Convenience methods
-client.launch_chrome("https://google.com")
-```
-
-### Green Agent API
+### Run unit tests
 
 ```bash
-# Health check
-GET /health
-# Returns: {"osworld_mode": "native", "osworld_server_url": "..."}
+# Run all tests
+pytest tests/
 
-# Start assessment
-POST /assessments/start
+# Run security tests
+pytest tests/test_security.py -v
+```
+
+### Manual evaluation test
+
+```bash
+# 1. Start green agent (Terminal 1)
+OSWORLD_OBS_TYPE="screenshot" \
+GOOGLE_CLOUD_PROJECT=your-gcp-project \
+GREEN_AGENT_API_KEY="your-api-key" \
+uvicorn green_agent.a2a.server_a2a:app --host 0.0.0.0 --port 8001
+
+# 2. Start white agent (Terminal 2)
+LOG_LEVEL=DEBUG uvicorn white_agent.a2a.server:app --host 0.0.0.0 --port 9002
+
+# 3. In another terminal, submit a task and check evaluation results
+curl -X POST http://localhost:8001/task \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_id": "eval-test-001",
+    "message": "Test evaluation",
+    "metadata": {
+      "osworld_task_id": "5ea617a3-0e86-4ba6-aab2-dac9aa2e8d57",
+      "domain": "os",
+      "white_agent_url": "http://localhost:9002",
+      "max_steps": 15
+    }
+  }'
+
+# 4. Check assessment status
+curl http://localhost:8001/assessments
+```
+
+---
+
+## Reproducing OSWorld Benchmark Results
+
+This system implements the [OSWorld benchmark](https://github.com/xlang-ai/OSWorld). To reproduce benchmark results:
+
+### Run a single task
+
+```bash
+# 1. Start both agents (in separate terminals)
+# Terminal 1 - White Agent:
+LOG_LEVEL=DEBUG uvicorn white_agent.a2a.server:app --host 0.0.0.0 --port 9002
+
+# Terminal 2 - Green Agent:
+OSWORLD_OBS_TYPE="screenshot" \
+GOOGLE_CLOUD_PROJECT=your-gcp-project \
+GREEN_AGENT_API_KEY="your-api-key" \
+uvicorn green_agent.a2a.server_a2a:app --host 0.0.0.0 --port 8001
+
+# 2. Run a specific OSWorld task (Terminal 3)
+curl -X POST http://localhost:8001/task \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_id": "benchmark-chrome-001",
+    "message": "OSWorld benchmark task",
+    "metadata": {
+      "osworld_task_id": "030eeff7-b492-4218-b312-701ec99ee0cc",
+      "domain": "chrome",
+      "white_agent_url": "http://localhost:9002",
+      "max_steps": 15
+    }
+  }'
+```
+
+### Run batch assessments via Web UI
+
+```bash
+# 1. Start all services (in separate terminals)
+
+# Terminal 1 - Green Agent:
+OSWORLD_OBS_TYPE="screenshot" \
+GOOGLE_CLOUD_PROJECT=your-gcp-project \
+GREEN_AGENT_API_KEY="your-api-key" \
+uvicorn green_agent.a2a.server_a2a:app --host 0.0.0.0 --port 8001
+
+# Terminal 2 - White Agent:
+LOG_LEVEL=DEBUG uvicorn white_agent.a2a.server:app --host 0.0.0.0 --port 9002
+
+# Terminal 3 - Web UI:
+cd webui-next && npm run dev
+
+# 2. Open http://localhost:3000
+# 3. Use the Launch page to run multiple tasks
+# 4. View results on the Leaderboard page
+```
+
+### Compare models on OSWorld tasks
+
+The system supports running the same task with different models:
+
+```bash
+# Run with GPT-4o (Terminal 1)
+MODEL=gpt-4o LOG_LEVEL=DEBUG uvicorn white_agent.a2a.server:app --host 0.0.0.0 --port 9002
+
+# Run with Claude (Terminal 2)
+MODEL=claude-3-5-sonnet-20241022 LOG_LEVEL=DEBUG uvicorn white_agent.a2a.server:app --host 0.0.0.0 --port 9003
+
+# Submit tasks to each agent and compare results via Web UI or curl
+```
+
+---
+
+## Running on AgentBeats
+
+This system is **AgentBeats-compatible** via the A2A protocol.
+
+### A2A Discovery Endpoint
+
+```bash
+# Get agent card (AgentBeats discovery)
+curl http://localhost:8001/.well-known/agent.json
+```
+
+### Deploy to Cloud Run for AgentBeats
+
+```bash
+# Deploy Green Agent
+bash deploy/scripts/green-agent.sh
+
+# Deploy White Agent
+bash deploy/scripts/white-agent-agentbeats.sh
+
+# After deployment, register with AgentBeats using the Cloud Run URLs
+```
+
+### AgentBeats Task Format
+
+```json
 {
-  "task_id": "test_chrome",
-  "white_agent_url": "http://localhost:9000"
+  "task_id": "agentbeats-task-001",
+  "message": "Complete the desktop automation task",
+  "metadata": {
+    "osworld_task_id": "030eeff7-b492-4218-b312-701ec99ee0cc",
+    "domain": "chrome",
+    "white_agent_url": "https://white-agent-xxxxx.run.app",
+    "max_steps": 15,
+    "callback_url": "https://agentbeats.example.com/callback"
+  }
 }
+```
 
-# Check status
-GET /assessments/{id}/status
+### A2A Endpoints
 
-# Get results
-GET /assessments/{id}/results
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/.well-known/agent.json` | GET | AgentBeats discovery |
+| `/agent-card` | GET | Agent capabilities |
+| `/task` | POST | Submit assessment task |
+| `/health` | GET | Health check |
+| `/assessments` | GET | List assessments |
 
-# List artifacts (screenshots)
-GET /assessments/{id}/artifacts
+---
+
+## Project Structure
+
+```
+green_agent/                # Assessment orchestrator (our code)
+  a2a/
+    server_a2a.py           # A2A server (main entry point)
+    server.py               # Legacy server
+    executor.py             # Task execution logic
+    vm_manager.py           # GCE VM lifecycle
+    vm_pool.py              # Snapshot-based VM pooling
+  config.py                 # Configuration
+  osworld_evaluator.py      # Evaluation using OSWorld metrics
+  action_tracker.py         # Loop detection
+  tasks_config/             # Task definitions (OSWorld format)
+    chrome/                 # 52 Chrome tasks
+    os/                     # 34 OS tasks
+    ...                     # Other domains
+
+white_agent/                # LLM decision agent (our code)
+  a2a/
+    server.py               # A2A server (main entry point)
+    controller.py           # AgentBeats controller
+  prompt_agent.py           # Multi-model prompt handling
+  prompts.py                # System prompts
+  core.py                   # Action parsing
+
+webui-next/                 # Web dashboard (our code)
+deploy/                     # Deployment configs
+vendor/OSWorld/             # External: OSWorld benchmark framework
+tests/                      # Test suite
 ```
 
 ---
 
-## 📦 What's Included
+## Environment Variables
 
-### Golden GCE Images
-
-#### osworld-golden-v2-gnome (Latest - Recommended)
-
-**Full GNOME Desktop environment** for OS task support:
-- **OS:** Ubuntu 22.04 LTS
-- **Desktop:** GNOME Shell 42 with GDM3
-- **Display:** Display :0 with X.Org dummy video driver (1920x1080)
-- **Screenshot Method:** scrot (patched for GDM/GNOME compatibility)
-- **Screen Management:** Lock/blanking disabled via dconf + autostart
-- **Python Deps:** python3-tk and python3-dev (required for pyautogui/mouseinfo)
-- **OSWorld:** REST API server (port 5000)
-- **Chrome:** Latest stable
-- **Apps:** Firefox, LibreOffice, GIMP, gedit, Nautilus (file manager)
-- **Boot time:** 60 seconds
-
-See [docs/deployment/CREATE_GOLDEN_IMAGE.md](docs/deployment/CREATE_GOLDEN_IMAGE.md) for creation guide.
-
----
-
-## 💰 Cost Analysis
-
-### Per VM
-- **Machine:** n1-standard-4 = $0.19/hour
-- **Disk:** 50GB = $0.005/hour
-- **Network:** ~$0.001/hour
-- **Total:** ~$0.20/hour
-
-### Per Task
-Average 5-minute task: **$0.016** (~1.6 cents)
-
-### Monthly Scenarios
-
-| Usage | VMs | Hours/Day | Cost/Month |
-|-------|-----|-----------|------------|
-| Development | 1 | 8 | $48 |
-| Small Production | 5 | 12 | $360 |
-| Medium Scale | 20 | 24 | $2,880 |
-
-### Cost Optimization
-
-- **Preemptible VMs:** 80% cheaper ($0.04/hour vs $0.20/hour)
-- **Auto-shutdown:** Delete VMs after 5 min idle
-- **Spot VMs:** Even cheaper than preemptible
-- **Golden images:** No setup time = pay only for execution
-
----
-
-## 📊 Performance Metrics
-
-### Latency (Native Mode)
-
-| Operation | Latency |
-|-----------|---------|
-| Screenshot | ~100ms |
-| Execute command | ~50-500ms |
-| Get accessibility tree | ~200-500ms |
-| Launch Chrome | ~3 seconds |
-
-### Throughput
-
-- **Single VM:** ~10-20 tasks/hour
-- **10 VMs:** ~100-200 tasks/hour
-- **100 VMs:** ~1000-2000 tasks/hour
-
-### Reliability
-
-- **Success rate:** ~99%
-- **Boot success:** ~100%
-- **Network issues:** <1%
-
----
-
-## 🔧 Environment Variables
-
-### Mode Selection
+### Required
 
 ```bash
-# Fake mode (no VM needed)
-USE_FAKE_OSWORLD=1
+# LLM API key (at least one)
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
 
-# Native mode (production)
-USE_FAKE_OSWORLD=0
-USE_NATIVE_OSWORLD=1
-OSWORLD_SERVER_URL="http://VM_IP:5000"
+# GCP Project
+GOOGLE_CLOUD_PROJECT=your-project-id
 
-# Docker mode (deprecated)
-USE_FAKE_OSWORLD=0
-USE_NATIVE_OSWORLD=0
+# Supabase (for Web UI)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-key
 ```
 
-### Configuration
+### Desktop VM Configuration
 
 ```bash
+USE_NATIVE_OSWORLD=1              # Use real VM
+USE_FAKE_OSWORLD=0                # Disable mock mode
+OSWORLD_SERVER_URL=http://IP:5000 # VM address
 OSWORLD_MAX_STEPS=15              # Max steps per task
-OSWORLD_SLEEP_AFTER_EXECUTION=3   # Seconds after each action
+```
+
+### White Agent Configuration
+
+```bash
+MODEL=gpt-4o                      # LLM model
+TEMPERATURE=1.0                   # Generation temperature
 OSWORLD_OBS_TYPE=screenshot       # Observation type
-DESKTOP_W=1920                    # Screen width
-DESKTOP_H=1080                    # Screen height
 ```
 
 ---
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
-### OSWorld VM Not Responding
+### Desktop VM Not Responding
 
 ```bash
-# SSH into VM
-gcloud compute ssh osworld-gnome-v2 --zone=us-central1-a
-
-# Check services
+gcloud compute ssh desktop-vm-1 --zone=us-central1-a
 sudo systemctl status gdm osworld-server
-
-# Check which display is active
-ls -la /tmp/.X11-unix/  # Should show X0
-
-# Verify GNOME is running
-ps aux | grep gnome-shell | grep -v grep
-
-# Restart services if needed
-sudo systemctl restart gdm
 sudo systemctl restart osworld-server
-
-# Check logs
 sudo journalctl -u osworld-server -n 50
 ```
 
-See [docs/troubleshooting/DEBUG_OSWORLD.md](docs/troubleshooting/DEBUG_OSWORLD.md) for complete troubleshooting guide.
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| VM not responding | Restart osworld-server service |
+| White agent timeout | Check API keys and model availability |
+| Evaluation returns 0 | Check task setup and evaluator config |
 
 ---
 
-## 🧰 Tech Stack
+## Links
 
-- **Python 3.11** — Core runtime
-- **FastAPI** — REST APIs (Green & White Agents)
-- **OSWorld** — Desktop environment framework
-- **GNOME Shell** — Desktop environment
-- **Google Cloud Platform** — VM hosting
-- **Golden VM Images** — Fast deployment
-- **Flask** — OSWorld server API
-- **requests** — HTTP client
-- **Pillow** — Image processing
-
----
-
-## 📈 Next Steps
-
-### Immediate (Recommended)
-
-1. ✅ ~~Test complete system~~ - White Agent + Green Agent + OSWorld **DONE**
-2. ✅ ~~Run real benchmarks~~ - OSWorld evaluation tasks **DONE**
-3. ✅ ~~Build VM orchestration~~ - Cloud Run orchestrator **DONE**
-4. ✅ ~~WebUI~~ - Dashboard, launch, results browser, leaderboard **DONE**
-5. ✅ ~~Parallel runs~~ - Statistical significance testing **DONE**
-6. ✅ ~~Leaderboard system~~ - Agent configuration rankings **DONE**
-7. **Add evaluation logic** - Automate task success determination with OSWorld evaluators
-8. **Run full benchmark suite** - Test GPT-4o on all 369 OSWorld tasks
-
-### Short-term
-
-1. **Deploy orchestrator to production** - Test Cloud Run deployment end-to-end
-2. **Implement monitoring** - Metrics, logs, alerts for benchmark runs
-3. **Scale testing** - Run 10+ parallel GPT-4o benchmarks via orchestrator
-4. **Compare models** - Test GPT-4o vs Claude 3.5 Sonnet vs other VLMs
-5. **Add task queuing** - Pub/Sub or Cloud Tasks for better scaling
-6. **Export leaderboard data** - CSV/JSON export for analysis
-
----
-
-## 🔒 Security Notes
-
-**Current status:** Prototype for trusted environments
-
-**Known issues (not yet fixed):**
-- No authentication on APIs
-- No input validation on task files
-- SSRF vulnerabilities in white_client.py
-- Path traversal risks in file operations
-
-**Recommendations:**
-- Only expose on private networks
-- Add API authentication before production
-- Implement input validation
-- Use GCP firewall rules
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
----
-
-## 📝 License
-
-© 2025 Green Agent Project — Educational prototype
-
----
-
-## 🔗 Links
-
-- **OSWorld**: https://github.com/xlang-ai/OSWorld
-- **Issue Tracker**: https://github.com/jpablomm/green-agent/issues
+- **OSWorld Benchmark**: https://github.com/xlang-ai/OSWorld
+- **AgentBeats**: A2A protocol for agent communication
 - **GCP Console**: https://console.cloud.google.com/compute
-- **Documentation**: See [`docs/`](docs/) directory
 
 ---
 
-## 🎉 Achievements
+## Acknowledgments
 
-What we built:
+- **UC Berkeley** - CS294 Course Project
+- **OSWorld Team** - Desktop benchmark framework
+- **Google Cloud Platform** - Infrastructure
 
-- ✅ **Native OSWorld** - No Docker, 20x faster
-- ✅ **Golden Images** - 60-second deployment
-- ✅ **Complete Integration** - White + Green + OSWorld
-- ✅ **GPT-4o Benchmarking** - Full OSWorld evaluation with vision-language models
-- ✅ **REST API Client** - Full functionality with pyautogui support
-- ✅ **Web UI Dashboard** - Complete assessment management interface
-- ✅ **Parallel Runs** - 1-10 concurrent executions for statistical significance
-- ✅ **Leaderboard System** - Global and per-task agent configuration rankings
-- ✅ **Database Layer** - SQLite with auto-migration and batch tracking
-- ✅ **Batch Monitoring** - Real-time parallel run tracking with aggregate stats
-- ✅ **VM Orchestrator** - Cloud Run serverless orchestration
-- ✅ **Production Ready** - Tested, documented, working
-
-**From broken Docker/QEMU to production-ready benchmarking platform with full Web UI!** 🚀
-
----
-
-## 👏 Acknowledgments
-
-- **UC Berkeley OSWorld team** - For the benchmark framework
-- **CS294 course** - For the project inspiration
-- **Google Cloud Platform** - For reliable infrastructure
-
-Built with ❤️ for autonomous agent evaluation.
-
----
-
-**Ready to start?** See [docs/getting-started/RUN_COMPLETE_SYSTEM.md](docs/getting-started/RUN_COMPLETE_SYSTEM.md) for step-by-step guide!
+Built for autonomous agent evaluation research.

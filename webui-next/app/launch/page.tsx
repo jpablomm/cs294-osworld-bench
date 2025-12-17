@@ -43,23 +43,7 @@ export default function LaunchPage() {
   // Available models for selection
   // Model names must match what white_agent/prompt_agent.py supports
   const availableModels = [
-    { value: "gpt-5.1", label: "GPT-5.1", description: "OpenAI GPT-5.1 (recommended)" },
-    { value: "gpt-5", label: "GPT-5", description: "OpenAI GPT-5" },
-    { value: "gpt-5-mini-2025-08-07", label: "GPT-5 Mini", description: "OpenAI GPT-5 Mini (faster, cheaper)" },
-    { value: "gpt-4o", label: "GPT-4o", description: "OpenAI GPT-4o" },
-    { value: "gpt-4o-mini", label: "GPT-4o Mini", description: "OpenAI GPT-4o Mini (faster, cheaper)" },
-    { value: "claude-opus-4-5", label: "Claude Opus 4.5", description: "Anthropic Claude Opus 4.5 (most capable)" },
-    { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", description: "Anthropic Claude Sonnet 4.5" },
-    { value: "claude-sonnet-4", label: "Claude Sonnet 4", description: "Anthropic Claude Sonnet 4" },
-    { value: "qwen-vl-max", label: "Qwen VL Max", description: "Alibaba Qwen Vision-Language" },
-    // Groq models (Llama 4 with vision)
-    { value: "groq-llama4-scout", label: "Groq Llama 4 Scout", description: "Llama 4 Scout 17B - 750 t/s, vision" },
-    { value: "groq-llama4-maverick", label: "Groq Llama 4 Maverick", description: "Llama 4 Maverick 17B - 600 t/s, vision (more capable)" },
-    // Qwen3-VL on Vertex AI (requires deployment)
-    { value: "qwen3-vl-235b-instruct", label: "Qwen3-VL 235B", description: "Qwen3-VL 235B on Vertex AI - vision, GUI automation" },
-    { value: "qwen3-vl-30b-instruct", label: "Qwen3-VL 30B", description: "Qwen3-VL 30B on Vertex AI - faster, cheaper" },
-    // Experimental models
-    { value: "langchain-gpt-5.1", label: "⚗️ LangChain GPT-5.1", description: "EXPERIMENTAL: GPT-5.1 + web search", experimental: true },
+    { value: "gpt-5.1", label: "GPT-5.1", description: "OpenAI GPT-5.1" },
   ];
 
   // Get selected tasks array from IDs
