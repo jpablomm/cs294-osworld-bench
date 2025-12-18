@@ -2,6 +2,12 @@
 
 An academic project for evaluating autonomous agents on desktop automation tasks. This system provides infrastructure for running agents against the [OSWorld benchmark](https://github.com/xlang-ai/OSWorld), with cloud deployment, multi-model support, and A2A protocol compliance for AgentBeats.
 
+## Live Demo
+
+**Try it yourself:** [https://webui-nextjs-750082808015.us-central1.run.app/](https://webui-nextjs-750082808015.us-central1.run.app/)
+
+![Green Agent Web UI](website.png)
+
 ## What This Project Provides
 
 **Our contributions (this repository):**
